@@ -249,8 +249,7 @@ pub(crate) fn multi_scalar_mul_with_precompute(
     // Precompute table T
     let t_length = 2_u32.pow(scalars.len() as u32) as usize;
     let t: Vec<CurvePoint> = (0..t_length)
-        // .into_par_iter()
-        .into_iter()
+        .into_par_iter()
         .map(|j| unsafe {
             let e_is = (0..scalars.len())
                 .map(|i| ((j >> i) & 1) as u8)
@@ -259,7 +258,6 @@ pub(crate) fn multi_scalar_mul_with_precompute(
             for (i, &e_i) in e_is.iter().enumerate() {
                 // mul with e_i
                 let e_i_p = point_scalar_mul(Fr::from(e_i),points[i]);
-
                 xsk233_add(&mut tmp, &tmp, &e_i_p.0);
             }
             CurvePoint(tmp)
@@ -276,6 +274,14 @@ pub(crate) fn multi_scalar_mul_with_precompute(
                 let b_i = msb_bit(&scalars[i], bit_id as usize) as u32;
                 t_id += b_i * 2_u32.pow(i as u32);
             }
+            let t_id: u32 = scalars
+                .par_iter()
+                .enumerate()
+                .map(|(i, scalar)| {
+                    let b_i = msb_bit(&scalars[i], bit_id as usize) as u32;
+                    b_i * 2_u32.pow(i as u32)
+                })
+                .sum();
             if t_id != 0 {
                 xsk233_add(&mut result, &result, &t[t_id as usize].0); // add
             }

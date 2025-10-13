@@ -6,6 +6,8 @@ use rug::Integer;
 use rug::integer::Order;
 use crate::curve::Fr;
 
+// DecomposeElement holds the decomposition result (x, is_x_neg)
+pub struct Decomp(Fr, bool);
 
 // Convert BigInt<4> to Integer
 pub fn bigint4_to_integer(f: &BigInt<4>) -> Integer {
@@ -32,7 +34,7 @@ pub fn integer_to_bigint4(f: &Integer) -> BigInt<4> {
 
 // This function computes a hint (x, z) for a given scalar k such that k = x/z mod r
 // Adapted from: https://github.com/yelhousni/scalarmul-in-snark/blob/main/sage/decompose.py
-pub(crate) fn msm_simple_hint(k: Fr) -> (Fr, Fr, bool, bool) {
+pub(crate) fn msm_simple_decompose(k: Fr) -> (Decomp, Decomp) {
     // Convert to Integer
     let r_integer = bigint4_to_integer(&Fr::MODULUS);
     let k_integer = bigint4_to_integer(&k.into_bigint());
@@ -56,16 +58,60 @@ pub(crate) fn msm_simple_hint(k: Fr) -> (Fr, Fr, bool, bool) {
         (x, z) = (matrix[sol].index(0), matrix[sol].index(1));
     }
 
+    // Todo: Dont want to hardcode the threshold
     assert!(x.clone().abs() < threshold);
     assert!(z.clone().abs() < threshold);
 
-    let x_neg = x < &Integer::ZERO;
-    let z_neg = z < &Integer::ZERO;
+    let x_neg = *x < Integer::ZERO;
+    let z_neg = *z < Integer::ZERO;
 
     // convert to Fr
     let z_fr = Fr::from(integer_to_bigint4(z));
     let x_fr = Fr::from(integer_to_bigint4(x));
-    (x_fr, z_fr, x_neg, z_neg)
+    (Decomp(x_fr, x_neg), Decomp(z_fr, z_neg))
+}
+
+// This function computes a hint (x1, x2, z) for k1 = x1/z mod r and k2 = x2/z mod r
+// Adapted from: https://github.com/yelhousni/scalarmul-in-snark/blob/main/sage/decompose.py
+pub(crate) fn msm_double_decompose(k1: Fr, k2: Fr) -> (Decomp, Decomp, Decomp) {
+    // Convert to Integer
+    let r_integer = bigint4_to_integer(&Fr::MODULUS);
+    let k1_integer = bigint4_to_integer(&k1.into_bigint());
+    let k2_integer = bigint4_to_integer(&k2.into_bigint());
+
+    let mut basis = vec![
+        vec![r_integer.clone(), Integer::from(0), Integer::from(0)],
+        vec![Integer::from(0), r_integer.clone(), Integer::from(0)],
+        vec![k1_integer.clone(), k2_integer.clone(), Integer::from(1)],
+    ];
+    let mut matrix = Matrix::from_matrix(basis.clone());
+
+    // LLL
+    lll_bignum(&mut matrix, 0.501, 0.99);
+
+    // Check solution
+    let threshold = Integer::from(1) << 155;
+    let mut sol = 0;
+    let (mut x1, mut x2, mut z) = (matrix[sol].index(0), matrix[sol].index(1), matrix[sol].index(2));
+    while *z == Integer::ZERO {
+        sol += 1;
+        (x1, x2, z) = (matrix[sol].index(0), matrix[sol].index(1), matrix[sol].index(2));
+    }
+
+    // Todo: Dont want to hardcode the threshold
+    assert!(x1.clone().abs() < threshold);
+    assert!(x2.clone().abs() < threshold);
+    assert!(z.clone().abs() < threshold);
+
+    let x1_neg = *x1 < Integer::ZERO;
+    let x2_neg = *x2 < Integer::ZERO;
+    let z_neg = *z < Integer::ZERO;
+
+    // convert to Fr
+    let z_fr = Fr::from(integer_to_bigint4(z));
+    let x1_fr = Fr::from(integer_to_bigint4(x1));
+    let x2_fr = Fr::from(integer_to_bigint4(x2));
+    (Decomp(x1_fr, x1_neg), Decomp(x2_fr, x2_neg), Decomp(z_fr, z_neg))
 }
 
 pub(crate) fn msb_bit(scalar: &Fr, bit_id: usize) -> u8 {
@@ -85,15 +131,33 @@ mod tests {
     use crate::curve::Fr;
 
     #[test]
-    fn test_msm_simple_hint() {
+    fn test_msm_simple_decompose() {
         let mut rng = thread_rng();
         let scalars: Vec<Fr> = (0..20).map(|_| Fr::rand(&mut rng)).collect();
         for k in scalars {
-            let (x, z, x_neg, z_neg) = super::msm_simple_hint(k);
-            let x = if x_neg { -x } else { x };
-            let z = if z_neg { -z } else { z };
+            let (x, z) = super::msm_simple_decompose(k);
+            let x = if x.1 { -x.0 } else { x.0 };
+            let z = if z.1 { -z.0 } else { z.0 };
             let result = k * z - x;
             assert_eq!(result, Fr::ZERO);
+        }
+    }
+
+    #[test]
+    fn test_msm_double_decompose() {
+        let mut rng = thread_rng();
+        let scalars: Vec<Fr> = (0..20).map(|_| Fr::rand(&mut rng)).collect();
+        for ks in scalars.chunks(2) {
+            let k1 = ks[0];
+            let k2 = ks[1];
+            let (x1, x2, z) = super::msm_double_decompose(k1, k2);
+            let x1 = if x1.1 { -x1.0 } else { x1.0 };
+            let x2 = if x2.1 { -x2.0 } else { x2.0 };
+            let z = if z.1 { -z.0 } else { z.0 };
+            let result1 = k1 * z - x1;
+            let result2 = k2 * z - x2;
+            assert_eq!(result1, Fr::ZERO);
+            assert_eq!(result2, Fr::ZERO);
         }
     }
 
