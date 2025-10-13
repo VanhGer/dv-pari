@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::os::raw::c_void;
 use std::str::FromStr;
 use xs233_sys::{xsk233_add, xsk233_generator, xsk233_neutral, xsk233_point};
+use crate::utils::{msb_bit};
 
 /// FqConfig for Scalar Field of the curve
 #[derive(MontConfig, Debug)]
@@ -235,6 +236,55 @@ pub(crate) fn multi_scalar_mul(scalars: &[Fr], points: &[CurvePoint]) -> CurvePo
     )
 }
 
+// Optimization with precomputed table T
+pub(crate) fn multi_scalar_mul_with_precompute(
+    scalars: &[Fr],
+    points: &[CurvePoint],
+) -> CurvePoint {
+    assert_eq!(scalars.len(), points.len());
+    // limit to 32 points for now
+    assert!(scalars.len() <= 32);
+    // Todo: ensure all the scalars are in [0, 2^big_n)
+
+    // Precompute table T
+    let t_length = 2_u32.pow(scalars.len() as u32) as usize;
+    let t: Vec<CurvePoint> = (0..t_length)
+        // .into_par_iter()
+        .into_iter()
+        .map(|j| unsafe {
+            let e_is = (0..scalars.len())
+                .map(|i| ((j >> i) & 1) as u8)
+                .collect::<Vec<u8>>();
+            let mut tmp = xsk233_neutral;
+            for (i, &e_i) in e_is.iter().enumerate() {
+                // mul with e_i
+                let e_i_p = point_scalar_mul(Fr::from(e_i),points[i]);
+
+                xsk233_add(&mut tmp, &tmp, &e_i_p.0);
+            }
+            CurvePoint(tmp)
+        })
+        .collect();
+
+    // main loop
+    unsafe {
+        let mut result = xsk233_neutral;
+        for bit_id in 0..256 {
+            xsk233_add(&mut result, &result, &result); // double
+            let mut t_id: u32 = 0;
+            for i in 0..scalars.len() {
+                let b_i = msb_bit(&scalars[i], bit_id as usize) as u32;
+                t_id += b_i * 2_u32.pow(i as u32);
+            }
+            if t_id != 0 {
+                xsk233_add(&mut result, &result, &t[t_id as usize].0); // add
+            }
+        }
+        CurvePoint(result)
+    }
+
+}
+
 /// Convert scalar field element to byte array
 /// Pornin's [`xsk233_mulgen_frob`] accepts scalar as a byte array
 fn fr_to_le_bytes(fr: &Fr) -> Vec<u8> {
@@ -304,6 +354,21 @@ mod unit_test {
             }
             let total_msm = point_scalar_mul(total, points[0]);
             assert_eq!(total_msm, res);
+        }
+    }
+
+    #[test]
+    fn test_msm_with_precompute() {
+        let mut rng = thread_rng();
+        let n = 10;
+        unsafe {
+            let scalars: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let points: Vec<CurvePoint> = (0..n).map(|_| CurvePoint(xsk233_generator)).collect();
+            let res = super::multi_scalar_mul_with_precompute(&scalars, &points);
+
+            let expected_msm = multi_scalar_mul(&scalars, &points);
+
+            assert_eq!(expected_msm, res);
         }
     }
 
