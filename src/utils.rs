@@ -4,10 +4,12 @@ use lll_rs::l2::lll_bignum;
 use lll_rs::Matrix;
 use rug::Integer;
 use rug::integer::Order;
+use serde::{Deserialize, Serialize};
 use crate::curve::Fr;
 
 // DecomposeElement holds the decomposition result (x, is_x_neg)
-pub struct Decomp(Fr, bool);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Decomp(pub Fr, pub bool);
 
 // Convert BigInt<4> to Integer
 pub fn bigint4_to_integer(f: &BigInt<4>) -> Integer {

@@ -6,7 +6,7 @@ use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
 };
-use crate::curve::{CurvePoint, Fr, multi_scalar_mul, point_scalar_mul_gen};
+use crate::curve::{CurvePoint, Fr, multi_scalar_mul, point_scalar_mul_gen, multi_scalar_mul_with_precompute};
 use crate::ec_fft::{
     build_sect_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
@@ -30,6 +30,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::join;
 use std::fs::File;
 use std::path::Path;
+use xs233_sys::xsk233_neutral;
 
 /// Structured Reference String
 #[derive(Clone, Debug)]
@@ -502,17 +503,49 @@ impl SRS {
 
         let (proof_a0, is_a0_valid) = proof.a0.to_fr();
         let (proof_b0, is_b0_valid) = proof.b0.to_fr();
+        let (proof_x1, is_x1_valid) = proof.x1.0.to_fr();
+        let x1_neg = proof.x1.1;
+        let (proof_x2, is_x2_valid) = proof.x2.0.to_fr();
+        let x2_neg = proof.x2.1;
+        let (proof_z, is_z_valid) = proof.z.0.to_fr();
+        let z_neg = proof.z.1;
+
         let r0 = proof_a0 * proof_b0 - i0;
         // Step 3. Compute u₀ and v₀
         let delta2 = secrets.delta.square();
         let u0 = (proof_a0 + secrets.delta * proof_b0 + delta2 * r0) * secrets.epsilon;
         let v0 = (secrets.tau - fs_challenge_alpha) * secrets.epsilon;
-        // Step 4. Check v₀·K == P - u₀·G;
-        let lhs = multi_scalar_mul(&[v0, u0], &[proof_kzg_k, CurvePoint::generator()]);
-        let rhs = proof_commit_p;
+        // // Step 4. Check v₀·K == P - u₀·G;
+        // println!("v0: {:?}, u0: {:?}", v0, u0);
+        // let now = std::time::Instant::now();
+        // let lhs = multi_scalar_mul(&[v0, u0], &[proof_kzg_k, CurvePoint::generator()]);
+        // println!("Took {:?}ms to do multi_scalar_mul in verify", now.elapsed());
+        // let rhs = proof_commit_p;
 
-        let all_inputs_valid = is_a0_valid & is_b0_valid & is_commit_p_valid & is_kzg_k_valid;
+        // check: x_1 G + x_2Q - zP = 0, using multi_scalar_mul_with_precompute
+        let scalars = vec![proof_x1, proof_x2, proof_z];
+        let points = vec![
+            if x1_neg { CurvePoint::generator().negate() } else { CurvePoint::generator() },
+            if x2_neg { proof_kzg_k.negate() } else { proof_kzg_k },
+            if z_neg { proof_commit_p } else { proof_commit_p.negate() },
+        ];
+        let lhs = multi_scalar_mul_with_precompute(&scalars, &points);
+        let rhs = unsafe {
+            let zero = xsk233_neutral;
+            CurvePoint(zero)
+        };
+
+        // check k1 = x1/z mod r and k2 = x2/z mod r
+        let z = if z_neg { -proof_z } else { proof_z };
+        let x1 = if x1_neg { -proof_x1 } else { proof_x1 };
+        let x2 = if x2_neg { -proof_x2 } else { proof_x2 };
+        let is_k1_valid = (u0 * z - x1) == Fr::zero();
+        let is_k2_valid = (v0 * z - x2) == Fr::zero();
+
+        let all_inputs_valid = is_a0_valid & is_b0_valid & is_commit_p_valid & is_kzg_k_valid
+            & is_x1_valid & is_x2_valid & is_z_valid;
         let valid_proof = lhs == rhs;
-        valid_proof & all_inputs_valid
+        let valid_decomposition = is_k1_valid & is_k2_valid;
+        valid_proof & all_inputs_valid & valid_decomposition
     }
 }

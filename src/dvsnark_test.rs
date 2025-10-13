@@ -150,7 +150,7 @@ mod tests {
         let public_inputs: Vec<Fr> = vec![o, w];
         let witness = vec![y, z, x, t, s];
 
-        let mut rng = ChaCha20Rng::seed_from_u64(43);
+        let mut rng = ChaCha20Rng::seed_from_u64(1);
         let trapdoor = Trapdoor {
             tau: Fr::rand(&mut rng),
             delta: Fr::rand(&mut rng),
@@ -166,6 +166,10 @@ mod tests {
             true,
         )
         .unwrap();
+
+        let mut buf = Vec::new();
+        trapdoor.serialize_compressed(&mut buf).unwrap();
+        std::fs::write("srs_verifier_small_tmp/trapdoor.bin", &buf).unwrap();
 
         // Prover precomputes stuff he needs for proving
         // These precomputes can be reused for different proof generations
@@ -208,7 +212,7 @@ mod tests {
         let mut file = File::create("groth16/public_inputs.bin").unwrap();
         file.write_all(&buf).unwrap();
 
-        let mut rng = ChaCha20Rng::seed_from_u64(41);
+        let mut rng = ChaCha20Rng::seed_from_u64(2523);
 
         let elapsed = now.elapsed();
         println!("Took {} seconds to load R1CS witness", elapsed.as_secs());

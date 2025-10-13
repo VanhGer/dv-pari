@@ -186,6 +186,16 @@ impl CurvePoint {
             (CurvePoint(pt), success != 0)
         }
     }
+    
+    /// Negate a CurvePoint
+    pub fn negate(self) -> CurvePoint {
+        unsafe {
+            let neg_pt = self.0;
+            let mut result = xsk233_neutral;
+            xs233_sys::xsk233_neg(&mut result, &neg_pt);
+            CurvePoint(result)
+        }
+    }
 }
 
 // Calculate point scalar multiplication
