@@ -52,7 +52,7 @@ pub(crate) fn msm_simple_decompose(k: Fr) -> (Decomp, Decomp) {
     lll_bignum(&mut matrix, 0.501, 0.99);
 
     // Check solution
-    let threshold = Integer::from(1) << 116;
+    let bounded = Integer::from(1) << 116; // ~ 1.16r^{1/2}
     let mut sol = 0;
     let (mut x, mut z) = (matrix[sol].index(0), matrix[sol].index(1));
     while *z == Integer::ZERO {
@@ -60,9 +60,8 @@ pub(crate) fn msm_simple_decompose(k: Fr) -> (Decomp, Decomp) {
         (x, z) = (matrix[sol].index(0), matrix[sol].index(1));
     }
 
-    // Todo: Dont want to hardcode the threshold
-    assert!(x.clone().abs() < threshold);
-    assert!(z.clone().abs() < threshold);
+    assert!(x.clone().abs() < bounded);
+    assert!(z.clone().abs() < bounded);
 
     let x_neg = *x < Integer::ZERO;
     let z_neg = *z < Integer::ZERO;
@@ -92,7 +91,7 @@ pub(crate) fn msm_double_decompose(k1: Fr, k2: Fr) -> (Decomp, Decomp, Decomp) {
     lll_bignum(&mut matrix, 0.501, 0.99);
 
     // Check solution
-    let threshold = Integer::from(1) << 155;
+    let bounded = Integer::from(1) << 155; // ~ 1.22r^{2/3}
     let mut sol = 0;
     let (mut x1, mut x2, mut z) = (matrix[sol].index(0), matrix[sol].index(1), matrix[sol].index(2));
     while *z == Integer::ZERO {
@@ -100,10 +99,10 @@ pub(crate) fn msm_double_decompose(k1: Fr, k2: Fr) -> (Decomp, Decomp, Decomp) {
         (x1, x2, z) = (matrix[sol].index(0), matrix[sol].index(1), matrix[sol].index(2));
     }
 
-    // Todo: Dont want to hardcode the threshold
-    assert!(x1.clone().abs() < threshold);
-    assert!(x2.clone().abs() < threshold);
-    assert!(z.clone().abs() < threshold);
+
+    assert!(x1.clone().abs() < bounded);
+    assert!(x2.clone().abs() < bounded);
+    assert!(z.clone().abs() < bounded);
 
     let x1_neg = *x1 < Integer::ZERO;
     let x2_neg = *x2 < Integer::ZERO;

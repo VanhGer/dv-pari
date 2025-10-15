@@ -252,7 +252,7 @@ pub(crate) fn multi_scalar_mul_with_precompute(
     points: &[CurvePoint],
 ) -> CurvePoint {
     assert_eq!(scalars.len(), points.len());
-    // limit to 32 points for now
+    // limit to 32 points for now, cause the size of precomputed table is upto 2^scalars.len
     assert!(scalars.len() <= 32);
     // Todo: ensure all the scalars are in [0, 2^big_n)
 
