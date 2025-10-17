@@ -126,7 +126,7 @@ pub(crate) fn msb_bit(scalar: &Fr, bit_id: usize) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::{AdditiveGroup, BigInt};
+    use ark_ff::{AdditiveGroup, BigInt, BigInteger, PrimeField};
     use ark_std::rand::thread_rng;
     use ark_std::UniformRand;
     use crate::curve::Fr;
@@ -147,11 +147,30 @@ mod tests {
     #[test]
     fn test_msm_double_decompose() {
         let mut rng = thread_rng();
-        let scalars: Vec<Fr> = (0..20).map(|_| Fr::rand(&mut rng)).collect();
+        let scalars: Vec<Fr> = (0..2000).map(|_| Fr::rand(&mut rng)).collect();
         for ks in scalars.chunks(2) {
             let k1 = ks[0];
             let k2 = ks[1];
             let (x1, x2, z) = super::msm_double_decompose(k1, k2);
+
+            if !x1.1 && !x2.1 && z.1 {
+                println!("k1: {:?}", k1.into_bigint().to_bytes_be());
+                println!("k2: {:?}", k2.into_bigint().to_bytes_be());
+                println!("x1: {:?}", x1.0.into_bigint().to_bytes_be());
+                println!("x2: {:?}", x2.0.into_bigint().to_bytes_be());
+                println!("z: {:?}", z.0.into_bigint().to_bytes_be());
+
+                let x1 = if x1.1 { -x1.0 } else { x1.0 };
+                let x2 = if x2.1 { -x2.0 } else { x2.0 };
+                let z = if z.1 { -z.0 } else { z.0 };
+                let result1 = k1 * z - x1;
+                let result2 = k2 * z - x2;
+                assert_eq!(result1, Fr::ZERO);
+                assert_eq!(result2, Fr::ZERO);
+
+                break;
+            }
+
             let x1 = if x1.1 { -x1.0 } else { x1.0 };
             let x2 = if x2.1 { -x2.0 } else { x2.0 };
             let z = if z.1 { -z.0 } else { z.0 };
