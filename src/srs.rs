@@ -6,7 +6,7 @@ use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
 };
-use crate::curve::{CurvePoint, Fr, multi_scalar_mul, point_scalar_mul_gen, multi_scalar_mul_with_precompute};
+use crate::curve::{CurvePoint, Fr, multi_scalar_mul, point_scalar_mul_gen, hinted_multi_scalar_mul};
 use crate::ec_fft::{
     build_sect_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
@@ -529,7 +529,7 @@ impl SRS {
             if x2_neg { proof_kzg_k.negate() } else { proof_kzg_k },
             if z_neg { proof_commit_p } else { proof_commit_p.negate() },
         ];
-        let lhs = multi_scalar_mul_with_precompute(&scalars, &points);
+        let lhs = hinted_multi_scalar_mul(&scalars, &points);
         let rhs = unsafe {
             let zero = xsk233_neutral;
             CurvePoint(zero)

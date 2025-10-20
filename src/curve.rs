@@ -247,7 +247,7 @@ pub(crate) fn multi_scalar_mul(scalars: &[Fr], points: &[CurvePoint]) -> CurvePo
 }
 
 // Optimization with precomputed table T
-pub(crate) fn multi_scalar_mul_with_precompute(
+pub(crate) fn hinted_multi_scalar_mul(
     scalars: &[Fr],
     points: &[CurvePoint],
 ) -> CurvePoint {
@@ -327,11 +327,11 @@ fn fr_to_le_bytes(fr: &Fr) -> Vec<u8> {
 
 #[cfg(test)]
 mod unit_test {
-    use ark_ff::{AdditiveGroup, UniformRand};
+    use ark_ff::{AdditiveGroup, PrimeField, UniformRand};
     use ark_std::rand::thread_rng;
     use xs233_sys::{xsk233_add, xsk233_equals, xsk233_generator, xsk233_neutral};
 
-    use crate::curve::{CurvePoint, LambdaCurvePoint, point_scalar_mul, point_scalar_mul_gen};
+    use crate::curve::{CurvePoint, LambdaCurvePoint, point_scalar_mul, point_scalar_mul_gen, hinted_multi_scalar_mul};
 
     use super::{Fr, multi_scalar_mul};
 
@@ -374,18 +374,54 @@ mod unit_test {
     }
 
     #[test]
-    fn test_msm_with_precompute() {
+    fn test_hinted_msm() {
         let mut rng = thread_rng();
         let n = 10;
         unsafe {
             let scalars: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
             let points: Vec<CurvePoint> = (0..n).map(|_| CurvePoint(xsk233_generator)).collect();
-            let res = super::multi_scalar_mul_with_precompute(&scalars, &points);
-
+            let res = super::hinted_multi_scalar_mul(&scalars, &points);
             let expected_msm = multi_scalar_mul(&scalars, &points);
-
             assert_eq!(expected_msm, res);
         }
+    }
+
+    #[test]
+    fn test_hinted_double_scalar_mult() {
+        let k1_be_bytes = vec![0, 0, 0, 43, 52, 84, 176, 75, 70, 122, 59, 238, 90, 152, 55, 97, 148, 25, 71, 127, 67, 98, 248, 218, 190, 136, 214, 182, 47, 48, 167, 1];
+        let k2_be_bytes = vec![0, 0, 0, 89, 114, 117, 208, 3, 249, 12, 114, 129, 55, 155, 32, 198, 179, 51, 74, 131, 206, 34, 109, 103, 90, 135, 236, 251, 190, 106, 233, 253];
+        let x1_be_bytes = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 152, 120, 76, 232, 237, 6, 47, 82, 175, 113, 22, 122, 179, 146, 233, 97, 219, 67, 219];
+        let x2_be_bytes = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21, 10, 39, 160, 144, 191, 138, 213, 234, 230, 99, 71, 68, 57, 14, 197, 139, 238, 173];
+        let x3_be_bytes = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 37, 14, 188, 252, 244, 161, 199, 207, 181, 64, 226, 222, 43, 143, 181, 210, 199, 178, 168];
+
+        let k1 = Fr::from_be_bytes_mod_order(&k1_be_bytes);
+        let k2 = Fr::from_be_bytes_mod_order(&k2_be_bytes);
+        let x1 = Fr::from_be_bytes_mod_order(&x1_be_bytes);
+        let x2 = Fr::from_be_bytes_mod_order(&x2_be_bytes);
+        let x3 = Fr::from_be_bytes_mod_order(&x3_be_bytes);
+
+        let p1 = CurvePoint::generator();
+        let p2 = CurvePoint::generator();
+
+        let p3 = unsafe {
+            let mut tmp = xsk233_neutral;
+            let p1_mul = point_scalar_mul(k1, p1);
+            let p2_mul = point_scalar_mul(k2, p2);
+            xsk233_add(&mut tmp, &p1_mul.0, &p2_mul.0);
+            CurvePoint(tmp)
+        };
+
+        println!("p3: {:?}", p3.to_lambda());
+
+        let res = hinted_multi_scalar_mul(
+            &[x1, x2, x3],
+            &[p1, p2, p3]
+        );
+
+        let identity = unsafe {
+            CurvePoint(xsk233_neutral)
+        };
+        assert_eq!(identity, res);
     }
 
     #[test]

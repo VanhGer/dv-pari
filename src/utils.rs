@@ -148,29 +148,24 @@ mod tests {
     fn test_msm_double_decompose() {
         let mut rng = thread_rng();
         let scalars: Vec<Fr> = (0..2000).map(|_| Fr::rand(&mut rng)).collect();
+        let mut pr = true;
         for ks in scalars.chunks(2) {
             let k1 = ks[0];
             let k2 = ks[1];
             let (x1, x2, z) = super::msm_double_decompose(k1, k2);
-
-            if !x1.1 && !x2.1 && z.1 {
+            
+            if pr {
                 println!("k1: {:?}", k1.into_bigint().to_bytes_be());
                 println!("k2: {:?}", k2.into_bigint().to_bytes_be());
                 println!("x1: {:?}", x1.0.into_bigint().to_bytes_be());
                 println!("x2: {:?}", x2.0.into_bigint().to_bytes_be());
                 println!("z: {:?}", z.0.into_bigint().to_bytes_be());
-
-                let x1 = if x1.1 { -x1.0 } else { x1.0 };
-                let x2 = if x2.1 { -x2.0 } else { x2.0 };
-                let z = if z.1 { -z.0 } else { z.0 };
-                let result1 = k1 * z - x1;
-                let result2 = k2 * z - x2;
-                assert_eq!(result1, Fr::ZERO);
-                assert_eq!(result2, Fr::ZERO);
-
-                break;
+                println!("x1_neg: {:?}", x1.1);
+                println!("x2_neg: {:?}", x2.1);
+                println!("z_neg: {:?}", z.1);
+                pr = false;
             }
-
+            
             let x1 = if x1.1 { -x1.0 } else { x1.0 };
             let x2 = if x2.1 { -x2.0 } else { x2.0 };
             let z = if z.1 { -z.0 } else { z.0 };
