@@ -512,7 +512,7 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 [[package]]
 name = "lll-rs"
 version = "0.3.0"
-source = "git+https://github.com/VanhGer/lll-rs.git#06b5f8bd328c75ab10741b9bfa4c376c34710aa0"
+source = "git+https://github.com/GOATNetwork/lll-rs.git#093b997a51287610d83a0e07c40c5103b4cc2d69"
 dependencies = [
  "rug",
 ]

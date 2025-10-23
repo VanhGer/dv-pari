@@ -23,7 +23,7 @@ mod tests {
     use crate::gnark_r1cs::{Row, SparseR1CSTable, Term};
     use crate::srs::{SRS, Trapdoor};
 
-    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+    use ark_serialize::CanonicalSerialize;
     use ark_std::rand::SeedableRng;
 
     use rand_chacha::ChaCha20Rng;
@@ -149,6 +149,11 @@ mod tests {
         // public and private inputs
         let public_inputs: Vec<Fr> = vec![o, w];
         let witness = vec![y, z, x, t, s];
+
+        let mut buf = Vec::new();
+        public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
+        let mut file = File::create("srs_verifier_small_tmp/public_inputs.bin").unwrap();
+        file.write_all(&buf).unwrap();
 
         let mut rng = ChaCha20Rng::seed_from_u64(1);
         let trapdoor = Trapdoor {

@@ -6,7 +6,7 @@ use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
 };
-use crate::curve::{CurvePoint, Fr, multi_scalar_mul, point_scalar_mul_gen, hinted_multi_scalar_mul};
+use crate::curve::{CurvePoint, Fr, hinted_multi_scalar_mul, point_scalar_mul_gen};
 use crate::ec_fft::{
     build_sect_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
@@ -525,9 +525,21 @@ impl SRS {
         // check: x_1 G + x_2Q - zP = 0, using multi_scalar_mul_with_precompute
         let scalars = vec![proof_x1, proof_x2, proof_z];
         let points = vec![
-            if x1_neg { CurvePoint::generator().negate() } else { CurvePoint::generator() },
-            if x2_neg { proof_kzg_k.negate() } else { proof_kzg_k },
-            if z_neg { proof_commit_p } else { proof_commit_p.negate() },
+            if x1_neg {
+                CurvePoint::generator().negate()
+            } else {
+                CurvePoint::generator()
+            },
+            if x2_neg {
+                proof_kzg_k.negate()
+            } else {
+                proof_kzg_k
+            },
+            if z_neg {
+                proof_commit_p
+            } else {
+                proof_commit_p.negate()
+            },
         ];
         let lhs = hinted_multi_scalar_mul(&scalars, &points);
         let rhs = unsafe {
@@ -542,8 +554,13 @@ impl SRS {
         let is_k1_valid = (u0 * z - x1) == Fr::zero();
         let is_k2_valid = (v0 * z - x2) == Fr::zero();
 
-        let all_inputs_valid = is_a0_valid & is_b0_valid & is_commit_p_valid & is_kzg_k_valid
-            & is_x1_valid & is_x2_valid & is_z_valid;
+        let all_inputs_valid = is_a0_valid
+            && is_b0_valid
+            && is_commit_p_valid
+            && is_kzg_k_valid
+            && is_x1_valid
+            && is_x2_valid
+            && is_z_valid;
         let valid_proof = lhs == rhs;
         let valid_decomposition = is_k1_valid & is_k2_valid;
         valid_proof & all_inputs_valid & valid_decomposition
