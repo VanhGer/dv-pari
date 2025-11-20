@@ -188,7 +188,6 @@ mod tests {
         println!("Dumped proof to {}", &proof_path.to_str().unwrap());
 
         let proof = read_proof_from_file(&proof_path.to_str().unwrap()).unwrap();
-
         // Designated verifier verifies proof
         let public_inputs: Vec<Fr> = vec![o, w];
         let result = SRS::verify(trapdoor, &public_inputs, &proof);

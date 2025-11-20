@@ -4,9 +4,9 @@ use crate::artifacts::{
     BAR_WTS, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q, TREE_2N,
     TREE_N, TREE_ND, Z_POLY, Z_VALS2_INV,
 };
-use crate::curve::{CurvePoint, Fr, FrBits, LambdaCurvePoint, multi_scalar_mul};
+use crate::curve::{CurvePoint, Fr, FrBits, multi_scalar_mul};
 use crate::ec_fft::{
-    build_sect_ecfft_tree, compute_barycentric_weights,
+    build_bn254_ecfft_tree, compute_barycentric_weights,
     evaluate_poly_at_alpha_using_barycentric_weights, evaluate_vanishing_poly_at_domain,
     get_both_domains,
 };
@@ -14,7 +14,6 @@ use crate::gnark_r1cs::{R1CSInstance, evaluate_monomial_basis_poly};
 use crate::io_utils::{read_fr_vec_from_file, read_point_vec_from_file, write_fr_vec_to_file};
 use crate::srs::{SRS, Trapdoor};
 use crate::tree_io::{read_fftree_from_file, read_minimal_fftree_from_file, write_fftree_to_file};
-use crate::utils::msm_double_decompose;
 use anyhow::{Context, Result};
 use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ark_poly::univariate::DensePolynomial;
@@ -41,23 +40,17 @@ use std::path::Path;
 /// * `i0`: Public Input polynomial i(X) evaluated at challenge
 ///
 /// We require the proof to be of small size, so we represent the data in compressed form
-/// Total Size = 2 * (Lambda Curve Point) 60 bytes + 2 * (Scalar Field Element) 29 bytes = 178 bytes
+// Total Size =
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
-    /// commit_p encoded as Lopez–Dahab λ coordinates
-    pub commit_p: LambdaCurvePoint,
-    /// kzg_k encoded as Lopez–Dahab λ coordinates
-    pub kzg_k: LambdaCurvePoint,
+    /// commit_p
+    pub commit_p: CurvePoint,
+    /// kzg_k
+    pub kzg_k: CurvePoint,
     /// a0
     pub a0: FrBits,
     /// b0
     pub b0: FrBits,
-    /// x1, x2, z for optimize MSM
-    pub x1: (FrBits, bool),
-    /// x2
-    pub x2: (FrBits, bool),
-    /// z
-    pub z: (FrBits, bool),
 }
 
 /// Dump proof to file
@@ -164,7 +157,7 @@ impl Transcript {
         self.witness_commitment_hash = {
             let buf: Vec<u8> = witness_commitment
                 .iter()
-                .flat_map(|cp| cp.to_lambda().to_bytes())
+                .flat_map(|cp| cp.to_bytes())
                 .collect();
             let buf_hash = blake3::hash(&buf);
             Some(buf_hash)
@@ -281,7 +274,7 @@ pub fn prover_prepares_precomputes(
             println!("Computing {:?} …", path.display());
             // We require the tree to only include fields necessary for `FFTree::extend()`, so we load a `minimal` tree
             // This puts lesser memory requirement
-            let tree = build_sect_ecfft_tree(
+            let tree = build_bn254_ecfft_tree(
                 domain_len,
                 shift_to_odd_domain,
                 n_log + 1, // log(2*num_constraints)
@@ -489,6 +482,7 @@ impl Proof {
             let msm_gm = multi_scalar_mul(&assignment, &g_m);
 
             println!("Include circuit and public input in trascript");
+            // empty to reduce time
             transcript.circuit_info_hash(&inst);
             transcript.public_input_hash(&public_inputs);
             (msm_gm, evals, inst.num_constraints)
@@ -539,7 +533,6 @@ impl Proof {
         };
 
         let commit_p = CurvePoint::add(msm_q, msm_gm);
-
         transcript.witness_commitment_hash(&[commit_p]);
 
         {
@@ -705,23 +698,11 @@ impl Proof {
         println!("msm g_k");
         let kzg_k = multi_scalar_mul(&srs_s_k, &srs_g_k);
 
-        // After prover publishes commit_p, kzg_k, alpha, a0, b0, verifier reveals trapdoor.
-        let buf = std::fs::read(format!("{cache_dir}/trapdoor.bin")).unwrap();
-        let trapdoor = Trapdoor::deserialize_compressed(&buf[..]).unwrap();
-        // Compute u0, v0
-        let delta2 = trapdoor.delta.square();
-        let u0 = (a0 + trapdoor.delta * b0 + delta2 * r0) * trapdoor.epsilon;
-        let v0 = (trapdoor.tau - alpha) * trapdoor.epsilon;
-        // Decompose
-        let (x1, x2, z) = msm_double_decompose(u0, v0);
         Self {
-            commit_p: commit_p.to_lambda(),
-            kzg_k: kzg_k.to_lambda(),
+            commit_p,
+            kzg_k,
             a0: FrBits::from_fr(a0),
             b0: FrBits::from_fr(b0),
-            x1: (FrBits::from_fr(x1.0), x1.1),
-            x2: (FrBits::from_fr(x2.0), x2.1),
-            z: (FrBits::from_fr(z.0), z.1),
         }
     }
 
@@ -746,12 +727,6 @@ impl Proof {
             .collect();
         let mut a0 = self.a0.0.to_vec();
         let mut b0 = self.b0.0.to_vec();
-        let mut x1 = self.x1.0.0.to_vec();
-        let x1_neg = self.x1.1;
-        let mut x2 = self.x2.0.0.to_vec();
-        let x2_neg = self.x2.1;
-        let mut z = self.z.0.0.to_vec();
-        let z_neg = self.z.1;
 
         let mut witness: Vec<bool> = Vec::new();
 
@@ -759,12 +734,6 @@ impl Proof {
         witness.append(&mut kzg_k);
         witness.append(&mut a0);
         witness.append(&mut b0);
-        witness.append(&mut x1);
-        witness.push(x1_neg);
-        witness.append(&mut x2);
-        witness.push(x2_neg);
-        witness.append(&mut z);
-        witness.push(z_neg);
 
         witness
     }
@@ -783,9 +752,9 @@ impl Proof {
 
         let mut offset = 0;
 
-        // commit_p (x || λ): 60 bytes = 480 bits
-        let commit_p: [u8; 60] = {
-            let mut arr = [0u8; 60];
+        // commit_p (x || λ): 96 bytes = 768 bits
+        let commit_p: [u8; 96] = {
+            let mut arr = [0u8; 96];
             for arr_i in &mut arr {
                 *arr_i = bits_le_to_u8(&bits[offset..offset + 8]);
                 offset += 8;
@@ -793,9 +762,9 @@ impl Proof {
             arr
         };
 
-        // kzg_k (x || λ): 60 bytes = 480 bits
-        let kzg_k: [u8; 60] = {
-            let mut arr = [0u8; 60];
+        // kzg_k (x || λ): 96 bytes = 768 bits
+        let kzg_k: [u8; 96] = {
+            let mut arr = [0u8; 96];
             for arr_i in &mut arr {
                 *arr_i = bits_le_to_u8(&bits[offset..offset + 8]);
                 offset += 8;
@@ -804,8 +773,8 @@ impl Proof {
         };
 
         // a0: read the same number of bits as frref_to_bits(&a0) would output
-        let a0_bit_len = 232; // You must define this to return bit length of a0 field
-        let a0_bits: [bool; 232] = bits[offset..offset + a0_bit_len].try_into().unwrap();
+        let a0_bit_len = 254; // You must define this to return bit length of a0 field
+        let a0_bits: [bool; 254] = bits[offset..offset + a0_bit_len].try_into().unwrap();
         let a0 = FrBits(a0_bits);
         offset += a0_bit_len;
 
@@ -814,34 +783,16 @@ impl Proof {
         let b0 = FrBits(b0_bits);
         offset += a0_bit_len;
 
-        // x1: same size as a0 + 1 bit for sign
-        let x1_bits = bits[offset..offset + a0_bit_len].try_into().unwrap();
-        offset += a0_bit_len;
-        let x1_neg = bits[offset];
-        let x1 = (FrBits(x1_bits), x1_neg);
-        offset += 1;
-
-        // x2: same size as a0 + 1 bit for sign
-        let x2_bits = bits[offset..offset + a0_bit_len].try_into().unwrap();
-        offset += a0_bit_len;
-        let x2_neg = bits[offset];
-        let x2 = (FrBits(x2_bits), x2_neg);
-        offset += 1;
-
-        // z: same size as a0 + 1 bit for sign
-        let z_bits = bits[offset..offset + a0_bit_len].try_into().unwrap();
-        offset += a0_bit_len;
-        let z_neg = bits[offset];
-        let z = (FrBits(z_bits), z_neg);
+        let commit_p = CurvePoint::from_bytes(&commit_p);
+        assert!(commit_p.checked());
+        let kzg_k = CurvePoint::from_bytes(&kzg_k);
+        assert!(kzg_k.checked());
 
         Proof {
-            commit_p: LambdaCurvePoint::from_bytes(&commit_p),
-            kzg_k: LambdaCurvePoint::from_bytes(&kzg_k),
+            commit_p,
+            kzg_k,
             a0,
             b0,
-            x1,
-            x2,
-            z,
         }
     }
 }

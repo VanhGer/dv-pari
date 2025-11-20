@@ -1,39 +1,33 @@
-//! Wrapper over an existing library for sect233k1 curve operations
+//! Wrapper over an existing library for bn254 curve operations
 
 // `unexpected_cfgs` allowed to appease warning thrown by MontConfig macro
 #![allow(unexpected_cfgs)]
-use crate::utils::msb_bit;
-use ark_ff::fields::{Fp256, MontBackend, MontConfig};
-use ark_ff::{One, PrimeField, Zero};
+
+use std::ops::{Mul, Neg};
+use ark_ff::{AdditiveGroup, BigInteger, One, PrimeField, Zero};
+use ark_bn254::{Fq, G1Projective};
 use num_bigint::BigUint;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use serde::{Deserialize, Serialize};
-use std::os::raw::c_void;
 use std::str::FromStr;
-use xs233_sys::{xsk233_add, xsk233_generator, xsk233_neutral, xsk233_point};
-
-/// FqConfig for Scalar Field of the curve
-#[derive(MontConfig, Debug)]
-#[modulus = "3450873173395281893717377931138512760570940988862252126328087024741343"]
-#[generator = "3"]
-pub struct FqConfig;
+use ark_ec::{CurveGroup, PrimeGroup};
 
 /// Represents a scalar field element
-pub type Fr = Fp256<MontBackend<FqConfig, 4>>;
+pub type Fr = ark_bn254::Fr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// 232-bit Serialized Fr
-pub struct FrBits(pub [bool; 232]);
+/// 254-bit Serialized Fr
+pub struct FrBits(pub [bool; 254]);
 
 impl Serialize for FrBits {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        // Pack bits into 29 bytes (232 bits = 29 * 8)
-        let mut bytes = [0u8; 29];
+        // Pack bits into 32 bytes (254 bits <= 32 * 8)
+        let mut bytes = [0u8; 32];
         for (i, bit) in self.0.iter().enumerate() {
             if *bit {
                 bytes[i / 8] |= 1 << (i % 8);
@@ -49,11 +43,11 @@ impl<'de> Deserialize<'de> for FrBits {
         D: serde::Deserializer<'de>,
     {
         let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
-        if bytes.len() != 29 {
-            return Err(serde::de::Error::custom("expected 29 bytes"));
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom("expected 32 bytes"));
         }
-        let mut bits = [false; 232];
-        for i in 0..232 {
+        let mut bits = [false; 254];
+        for i in 0..254 {
             bits[i] = (bytes[i / 8] >> (i % 8)) & 1 == 1;
         }
         Ok(FrBits(bits))
@@ -65,8 +59,8 @@ impl FrBits {
     pub fn from_fr(p: Fr) -> Self {
         let n: BigUint = p.into();
         let bytes = n.to_bytes_le();
-        let mut bits = [false; 232];
-        for i in 0..232 {
+        let mut bits = [false; 254];
+        for i in 0..254 {
             let byte = if i / 8 < bytes.len() { bytes[i / 8] } else { 0 };
             let r = (byte >> (i % 8)) & 1;
             bits[i] = r != 0;
@@ -84,7 +78,7 @@ impl FrBits {
             }
         }
         let nmod = BigUint::from_str(
-            "3450873173395281893717377931138512760570940988862252126328087024741343",
+            "21888242871839275222246405745257275088548364400416034343698204186575808495617",
         )
         .unwrap();
         if n >= nmod {
@@ -94,134 +88,102 @@ impl FrBits {
     }
 }
 
-/// Represents a point in curve
+/// Represents a G1 point in curve
 #[derive(Debug, Clone, Copy)]
-pub struct CurvePoint(pub xsk233_point);
+pub struct CurvePoint(pub G1Projective);
 
-/// Lopez–Dahab λ coordinates (x, λ) for a curve point over GF(2^233).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LambdaCurvePoint {
-    /// Canonical little-endian encoding of the x-coordinate.
-    pub x: [u8; 30],
-    /// Canonical little-endian encoding of the λ (= s) coordinate.
-    pub lambda: [u8; 30],
+impl Serialize for CurvePoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let p = &self.0;
+
+        // serialize 3 projective coordinates
+        let mut bytes = Vec::with_capacity(96);
+        bytes.extend_from_slice(p.x.into_bigint().to_bytes_be().as_slice());
+        bytes.extend_from_slice(p.y.into_bigint().to_bytes_be().as_slice());
+        bytes.extend_from_slice(p.z.into_bigint().to_bytes_be().as_slice());
+
+        serializer.serialize_bytes(&bytes)
+    }
 }
 
-impl LambdaCurvePoint {
-    /// Serialize Lopez–Dahab λ coordinates to a 60 byte array.
-    pub fn to_bytes(self) -> [u8; 60] {
-        let mut res = [0u8; 60];
-        res[..30].copy_from_slice(&self.x);
-        res[30..].copy_from_slice(&self.lambda);
-        res
-    }
 
-    /// Deserialize Lopez–Dahab λ coordinates from a 60 byte array.
-    pub fn from_bytes(bytes: &[u8; 60]) -> Self {
-        let mut x = [0u8; 30];
-        let mut lambda = [0u8; 30];
-        x.copy_from_slice(&bytes[..30]);
-        lambda.copy_from_slice(&bytes[30..]);
-        LambdaCurvePoint { x, lambda }
+impl<'de> Deserialize<'de> for CurvePoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
+
+        if bytes.len() != 96 {
+            return Err(serde::de::Error::custom("expected 96 bytes for projective point"));
+        }
+
+        let x = Fq::from_be_bytes_mod_order(&bytes[0..32]);
+        let y = Fq::from_be_bytes_mod_order(&bytes[32..64]);
+        let z = Fq::from_be_bytes_mod_order(&bytes[64..96]);
+
+        Ok(CurvePoint(G1Projective::new_unchecked(x, y, z)))
     }
 }
 
 impl PartialEq for CurvePoint {
     fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            let r = xs233_sys::xsk233_equals(&self.0, &other.0);
-            r != 0
-        }
+        self.0 == other.0
     }
 }
 impl Eq for CurvePoint {}
 
 impl CurvePoint {
     pub(crate) fn generator() -> Self {
-        unsafe { CurvePoint(xsk233_generator) }
+        CurvePoint(G1Projective::generator())
     }
 
     pub(crate) fn add(a: CurvePoint, b: CurvePoint) -> Self {
-        unsafe {
-            let mut p3 = xsk233_neutral;
-            xsk233_add(&mut p3, &a.0, &b.0);
-            CurvePoint(p3)
-        }
+        CurvePoint(a.0 + b.0)
     }
 
-    /// Serialize CurvePoint to Lopez–Dahab λ bytes (x || λ, 60 bytes).
-    pub fn to_bytes(self) -> [u8; 60] {
-        self.to_lambda().to_bytes()
+    /// Serialize CurvePoint to bytes
+    pub fn to_bytes(self) -> [u8; 96] {
+        let mut bytes = [0u8; 96];
+        let x_bytes: [u8; 32] = self.0.x.into_bigint().to_bytes_le().try_into().unwrap();
+        let y_bytes: [u8; 32] = self.0.y.into_bigint().to_bytes_le().try_into().unwrap();
+        let z_bytes: [u8; 32] = self.0.z.into_bigint().to_bytes_le().try_into().unwrap();
+        bytes[..32].copy_from_slice(&x_bytes);
+        bytes[32..64].copy_from_slice(&y_bytes);
+        bytes[64..].copy_from_slice(&z_bytes);
+        bytes
     }
 
-    /// Deserialize a CurvePoint from Lopez–Dahab λ bytes (x || λ, 60 bytes).
-    pub fn from_bytes(src: &[u8; 60]) -> (CurvePoint, bool) {
-        let lambda_coords = LambdaCurvePoint::from_bytes(src);
-        CurvePoint::from_lambda(&lambda_coords)
+    /// Deserialize Unchecked CurvePoint from bytes
+    pub fn from_bytes(src: &[u8; 96]) -> CurvePoint {
+        let x = Fq::from_le_bytes_mod_order(&src[..32]);
+        let y = Fq::from_le_bytes_mod_order(&src[32..64]);
+        let z = Fq::from_le_bytes_mod_order(&src[64..]);
+        let point = G1Projective::new_unchecked(x, y, z);
+        CurvePoint(point)
     }
 
-    /// Convert an extended point into Lopez–Dahab λ coordinates.
-    pub fn to_lambda(&self) -> LambdaCurvePoint {
-        let mut x = [0u8; 30];
-        let mut lambda = [0u8; 30];
-        unsafe {
-            xs233_sys::xsk233_to_affine(
-                &self.0,
-                x.as_mut_ptr() as *mut c_void,
-                lambda.as_mut_ptr() as *mut c_void,
-            );
-        }
-        LambdaCurvePoint { x, lambda }
-    }
-
-    /// Reconstruct a [`CurvePoint`] from Lopez–Dahab λ coordinates.
-    pub fn from_lambda(coords: &LambdaCurvePoint) -> (CurvePoint, bool) {
-        unsafe {
-            let mut pt = xsk233_neutral;
-            let success = xs233_sys::xsk233_from_affine(
-                &mut pt,
-                coords.x.as_ptr() as *const c_void,
-                coords.lambda.as_ptr() as *const c_void,
-            );
-            (CurvePoint(pt), success != 0)
-        }
-    }
-    /// Negate a CurvePoint
-    pub fn negate(self) -> CurvePoint {
-        unsafe {
-            let neg_pt = self.0;
-            let mut result = xsk233_neutral;
-            xs233_sys::xsk233_neg(&mut result, &neg_pt);
-            CurvePoint(result)
-        }
+    /// Check if the CurvePoint is valid
+    pub fn checked(&self) -> bool {
+        let affine_p = self.0.into_affine();
+        let checked = affine_p.is_on_curve() && affine_p.is_in_correct_subgroup_assuming_on_curve();
+        checked
     }
 }
 
 // Calculate point scalar multiplication
 pub(crate) fn point_scalar_mul(scalar: Fr, point: CurvePoint) -> CurvePoint {
-    let scalar = fr_to_le_bytes(&scalar);
-
-    unsafe {
-        let mut result = xsk233_neutral;
-        xs233_sys::xsk233_mul_frob(
-            &mut result,
-            &point.0,
-            scalar.as_ptr() as *const _,
-            scalar.len(),
-        );
-        CurvePoint(result)
-    }
+    let res = point.0.mul(scalar);
+    CurvePoint(res)
 }
 
 /// Point Scalar Multiplication with [`generator`] as the [`CurvePoint`]
 pub(crate) fn point_scalar_mul_gen(scalar: Fr) -> CurvePoint {
-    let scalar = fr_to_le_bytes(&scalar);
-
-    unsafe {
-        let mut result = xsk233_neutral;
-        xs233_sys::xsk233_mulgen_frob(&mut result, scalar.as_ptr() as *const _, scalar.len());
-        CurvePoint(result)
-    }
+    let res = G1Projective::generator().mul(scalar);
+    CurvePoint(res)
 }
 
 /// Multi Scalar Multiplication
@@ -236,96 +198,24 @@ pub(crate) fn multi_scalar_mul(scalars: &[Fr], points: &[CurvePoint]) -> CurvePo
         .into_par_iter();
 
     results_par_iter.reduce(
-        || unsafe { CurvePoint(xsk233_neutral) },
-        |p1: CurvePoint, p2: CurvePoint| unsafe {
-            let mut p3 = xsk233_neutral;
-            xsk233_add(&mut p3, &p1.0, &p2.0);
-            CurvePoint(p3)
-        },
+        || CurvePoint(G1Projective::ZERO),
+        |p1: CurvePoint, p2: CurvePoint| {
+            CurvePoint(p1.0 + p2.0)
+        }
     )
 }
 
-// Optimization with precomputed table T
-pub(crate) fn hinted_multi_scalar_mul(scalars: &[Fr], points: &[CurvePoint]) -> CurvePoint {
-    assert_eq!(scalars.len(), points.len());
-    // limit to 32 points for now, cause the size of precomputed table is upto 2^scalars.len
-    assert!(scalars.len() <= 32);
-    // Todo: ensure all the scalars are in [0, 2^big_n)
-
-    // Precompute table T
-    let t_length = 2_u32.pow(scalars.len() as u32) as usize;
-    let t: Vec<CurvePoint> = (0..t_length)
-        .into_par_iter()
-        .map(|j| unsafe {
-            let e_is = (0..scalars.len())
-                .map(|i| ((j >> i) & 1) as u8)
-                .collect::<Vec<u8>>();
-            let mut tmp = xsk233_neutral;
-            for (i, &e_i) in e_is.iter().enumerate() {
-                // mul with e_i
-                let e_i_p = point_scalar_mul(Fr::from(e_i), points[i]);
-                xsk233_add(&mut tmp, &tmp, &e_i_p.0);
-            }
-            CurvePoint(tmp)
-        })
-        .collect();
-
-    // main loop
-    unsafe {
-        let mut result = xsk233_neutral;
-        for bit_id in 0..256 {
-            xsk233_add(&mut result, &result, &result); // double
-            let t_id: u32 = scalars
-                .par_iter()
-                .enumerate()
-                .map(|(i, scalar)| {
-                    let b_i = msb_bit(scalar, bit_id as usize) as u32;
-                    b_i * 2_u32.pow(i as u32)
-                })
-                .sum();
-            if t_id != 0 {
-                xsk233_add(&mut result, &result, &t[t_id as usize].0); // add
-            }
-        }
-        CurvePoint(result)
-    }
-}
-
-/// Convert scalar field element to byte array
-/// Pornin's [`xsk233_mulgen_frob`] accepts scalar as a byte array
-fn fr_to_le_bytes(fr: &Fr) -> Vec<u8> {
-    let big_int = fr.into_bigint();
-    let limbs = big_int.0;
-
-    let mut bytes = Vec::with_capacity(32);
-    for limb in limbs.iter() {
-        bytes.extend_from_slice(&limb.to_le_bytes());
-    }
-    bytes.truncate(30); // 30 specified by `xs233_sys`
-
-    // remove trailing zeros
-    // helps reduce iteration in double-and-add iterations
-    while let Some(&last) = bytes.last() {
-        if last == 0 {
-            bytes.pop();
-        } else {
-            break;
-        }
-    }
-    bytes
-}
 
 #[cfg(test)]
 mod unit_test {
-    use ark_ff::{AdditiveGroup, PrimeField, UniformRand};
+    use ark_bn254::G1Projective;
+    use ark_ec::PrimeGroup;
+    use ark_ff::{AdditiveGroup, BigInteger, PrimeField, UniformRand};
     use ark_std::rand::thread_rng;
-    use xs233_sys::{xsk233_add, xsk233_equals, xsk233_generator, xsk233_neutral};
 
     use crate::curve::{
-        CurvePoint, LambdaCurvePoint, hinted_multi_scalar_mul, point_scalar_mul,
-        point_scalar_mul_gen,
+        CurvePoint, point_scalar_mul,
     };
-
     use super::{Fr, multi_scalar_mul};
 
     #[test]
@@ -335,166 +225,39 @@ mod unit_test {
         let k1 = Fr::rand(&mut rng);
         let k2 = Fr::rand(&mut rng);
 
-        unsafe {
-            let d = CurvePoint(xsk233_generator);
-            let y1 = point_scalar_mul(k1, d);
-            let y2 = point_scalar_mul(k2, d);
-            let y3 = point_scalar_mul(k1 + k2, d);
+        let d = CurvePoint(G1Projective::generator());
+        let y1 = point_scalar_mul(k1, d);
+        let y2 = point_scalar_mul(k2, d);
+        let y3 = point_scalar_mul(k1 + k2, d);
 
-            let mut y12 = xsk233_neutral;
-            xsk233_add(&mut y12, &y2.0, &y1.0);
-
-            let is_iden = xsk233_equals(&y12, &y3.0);
-            assert!(is_iden != 0);
-        }
+        let y12 = CurvePoint::add(y1, y2);
+        let is_iden = y12.eq(&y3);
+        assert!(is_iden);
     }
 
     #[test]
-    fn test_msm() {
+    fn test_msm_2() {
         let mut rng = thread_rng();
         let n = 10_000;
-        unsafe {
-            let scalars: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
-            let points: Vec<CurvePoint> = (0..n).map(|_| CurvePoint(xsk233_generator)).collect();
-            let res = multi_scalar_mul(&scalars, &points);
-            let mut total = Fr::ZERO;
-            for scalar in scalars {
-                total += scalar;
-            }
-            let total_msm = point_scalar_mul(total, points[0]);
-            assert_eq!(total_msm, res);
+        let scalars: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+        let points: Vec<CurvePoint> = (0..n).map(|_| CurvePoint(G1Projective::generator())).collect();
+        let res = multi_scalar_mul(&scalars, &points);
+        let mut total = Fr::ZERO;
+        for scalar in scalars {
+            total += scalar;
         }
-    }
-
-    #[test]
-    fn test_hinted_msm() {
-        let mut rng = thread_rng();
-        let n = 10;
-        unsafe {
-            let scalars: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
-            let points: Vec<CurvePoint> = (0..n).map(|_| CurvePoint(xsk233_generator)).collect();
-            let res = super::hinted_multi_scalar_mul(&scalars, &points);
-            let expected_msm = multi_scalar_mul(&scalars, &points);
-            assert_eq!(expected_msm, res);
-        }
-    }
-
-    #[test]
-    fn test_hinted_double_scalar_mult() {
-        let k1_be_bytes = vec![
-            0, 0, 0, 43, 52, 84, 176, 75, 70, 122, 59, 238, 90, 152, 55, 97, 148, 25, 71, 127, 67,
-            98, 248, 218, 190, 136, 214, 182, 47, 48, 167, 1,
-        ];
-        let k2_be_bytes = vec![
-            0, 0, 0, 89, 114, 117, 208, 3, 249, 12, 114, 129, 55, 155, 32, 198, 179, 51, 74, 131,
-            206, 34, 109, 103, 90, 135, 236, 251, 190, 106, 233, 253,
-        ];
-        let x1_be_bytes = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 152, 120, 76, 232, 237, 6, 47, 82, 175, 113, 22,
-            122, 179, 146, 233, 97, 219, 67, 219,
-        ];
-        let x2_be_bytes = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21, 10, 39, 160, 144, 191, 138, 213, 234, 230,
-            99, 71, 68, 57, 14, 197, 139, 238, 173,
-        ];
-        let x3_be_bytes = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 37, 14, 188, 252, 244, 161, 199, 207, 181, 64,
-            226, 222, 43, 143, 181, 210, 199, 178, 168,
-        ];
-        let k1 = Fr::from_be_bytes_mod_order(&k1_be_bytes);
-        let k2 = Fr::from_be_bytes_mod_order(&k2_be_bytes);
-        let x1 = Fr::from_be_bytes_mod_order(&x1_be_bytes);
-        let x2 = Fr::from_be_bytes_mod_order(&x2_be_bytes);
-        let x3 = Fr::from_be_bytes_mod_order(&x3_be_bytes);
-
-        let p1 = CurvePoint::generator();
-        let p2 = CurvePoint::generator();
-
-        let p3 = unsafe {
-            let mut tmp = xsk233_neutral;
-            let p1_mul = point_scalar_mul(k1, p1);
-            let p2_mul = point_scalar_mul(k2, p2);
-            xsk233_add(&mut tmp, &p1_mul.0, &p2_mul.0);
-            CurvePoint(tmp)
-        };
-
-        let res = hinted_multi_scalar_mul(&[x1, x2, x3], &[p1, p2, p3]);
-
-        let identity = unsafe { CurvePoint(xsk233_neutral) };
-        assert_eq!(identity, res);
+        let total_msm = point_scalar_mul(total, points[0]);
+        assert_eq!(total_msm, res);
     }
 
     #[test]
     // Verifies that a CurvePoint is recovered after serialize-then-deserialize
     fn test_curve_point_to_bytes() {
-        let generator = CurvePoint::generator();
-        let bytes = generator.to_bytes();
-        let (decoded, valid) = CurvePoint::from_bytes(&bytes);
-        assert!(valid);
-        assert_eq!(decoded, generator);
-    }
-
-    #[test]
-    fn test_neutral_lambda_coordinates() {
-        unsafe {
-            let neutral = CurvePoint(xsk233_neutral);
-            let coords = neutral.to_lambda();
-            assert_eq!(coords.x, [0u8; 30]);
-            let mut expected_lambda = [0u8; 30];
-            expected_lambda[0] = 1;
-            assert_eq!(coords.lambda, expected_lambda);
-        }
-    }
-
-    #[test]
-    fn test_generator_lambda_coordinates_stability() {
-        unsafe {
-            let generator = CurvePoint(xsk233_generator);
-            let coords = generator.to_lambda();
-            let expected = LambdaCurvePoint {
-                x: [
-                    230, 27, 170, 221, 203, 229, 80, 168, 84, 191, 102, 25, 126, 239, 36, 87, 6,
-                    185, 133, 101, 71, 236, 61, 251, 208, 118, 39, 185, 236, 1,
-                ],
-                lambda: [
-                    153, 154, 125, 54, 191, 224, 249, 102, 193, 150, 111, 7, 80, 50, 25, 247, 157,
-                    102, 243, 253, 252, 71, 170, 91, 78, 77, 59, 255, 237, 0,
-                ],
-            };
-            assert_eq!(coords, expected);
-        }
-    }
-
-    #[test]
-    fn test_lambda_roundtrip_generator() {
-        unsafe {
-            let generator = CurvePoint(xsk233_generator);
-            let coords = generator.to_lambda();
-            let (recovered, valid) = CurvePoint::from_lambda(&coords);
-            assert!(valid);
-            assert_eq!(recovered, generator);
-        }
-    }
-
-    #[test]
-    fn test_lambda_roundtrip_neutral() {
-        unsafe {
-            let neutral = CurvePoint(xsk233_neutral);
-            let coords = neutral.to_lambda();
-            let (recovered, valid) = CurvePoint::from_lambda(&coords);
-            assert!(valid);
-            assert_eq!(recovered, neutral);
-        }
-    }
-
-    #[test]
-    fn test_random_point_lambda_dump() {
-        let mut rng = thread_rng();
-        let scalar = Fr::rand(&mut rng);
-        let point = point_scalar_mul_gen(scalar);
-        let coords = point.to_lambda();
-        println!("random_point_x={:?}", coords.x);
-        println!("random_point_lambda={:?}", coords.lambda);
-        assert!(coords.x.iter().any(|&b| b != 0) || coords.lambda.iter().any(|&b| b != 0));
+        let point = CurvePoint(G1Projective::rand(&mut thread_rng()));
+        let bytes = point.to_bytes();
+        let decoded = CurvePoint::from_bytes(&bytes);
+        let checked = decoded.checked();
+        assert_eq!(decoded, point);
+        assert!(checked);
     }
 }

@@ -194,7 +194,7 @@ pub(crate) fn get_both_domains(tree2n: &FFTree<Fr>) -> [Vec<Fr>; 2] {
 ///     # domain_len: size of domain for polynomial operation
 ///     # shift_by_one: true for domain over D', false for domain D. shift_by_one swaps odd and even indexed leaves of a tree
 ///     # minimal_tree: true if FFTree<Fr> instance should only include fields necessary for proof generation. Useful for memory efficiency.
-pub(crate) fn build_sect_ecfft_tree(
+pub(crate) fn build_bn254_ecfft_tree(
     domain_len: usize,
     shift_by_one: bool,
     base_log_n: usize,
@@ -202,28 +202,28 @@ pub(crate) fn build_sect_ecfft_tree(
 ) -> Option<FFTree<Fr>> {
     // ecfft's find_curve.rs gives curve params for the necessary size of subgroup
     // for our case 28 is sufficient because we have number of constraints = ~2^23 < 2^subgroup_adic
-    let subgroup_adic = 28;
+    let subgroup_adic = 29;
     // (a, b) params in "Good Curve" form is returned by find_curve.rs
     // ecfft_curve_params_utils::get_short_weierstrass_params_from_good_curve_params converts it into SW form
     // which we hardcode below
     let curve: ShortWeierstrassCurve<Fr> = ShortWeierstrassCurve::new(
-        Fr::from_str("2125753088427212854352924174339172498722499297750753614229533284661082")
+        Fr::from_str("13525369009256184232581429018590412183438692616651058021776068114908837964474")
             .unwrap(),
-        Fr::from_str("3303427382072851929105738691313541325219445842218525662544269869787589")
+        Fr::from_str("18944705127795713747740534479415798471647214051370467611230431453826282142401")
             .unwrap(),
     );
     let subgroup_generator = Point::new(
-        Fr::from_str("1969398527398874941115360315313056361667745675958024267654083765592400")
+        Fr::from_str("18268254051851975380888516152123010311469729152936862438156057941062434653585")
             .unwrap(),
-        Fr::from_str("917696706299601920847965073366118878832337776859300472447868491055982")
+        Fr::from_str("20873519653512271756414217005481612586070404333932963586433799949882748618991")
             .unwrap(),
         curve,
     );
     // suitable coset offset is sampled using ecfft_curve_params_utils::find_coset_for_sw
     let coset_offset = Point::new(
-        Fr::from_str("1557215852494830750811239888869886110709986867282698163663807961412586")
+        Fr::from_str("21316487044915344142485408468163314925958844547934638397731985234005641718651")
             .unwrap(),
-        Fr::from_str("2302954593454110051167704558708330032236229062988890422530712548754008")
+        Fr::from_str("20394002569852845607747674175048134691431975009890372301276491478648963832911")
             .unwrap(),
         curve,
     );
@@ -575,16 +575,16 @@ mod ecfft_curve_params_utils {
 
         #[test]
         fn test_sect_get_short_weierstrass_params_from_good_curve_params() {
-            // 2^28 subgroup order
+            // 2^29 subgroup order
             let a = Fr::from(
                 BigUint::from_str(
-                    "1612258558012370015697612802162317394937170966914298907792172265935528",
+                    "5608273167371088443393205675582213839803745445539096174167888423722982218332",
                 )
                 .unwrap(),
             );
             let b = Fr::from(
                 BigUint::from_str(
-                    "1649539414812869195553934139907948967057031997387519615898515827272474",
+                    "3742171633357136290792962594592910113557528971686787903241767133587195564333",
                 )
                 .unwrap(),
             );
@@ -592,13 +592,13 @@ mod ecfft_curve_params_utils {
 
             let px = Fr::from(
                 BigUint::from_str(
-                    "1431979008061418269216156047925617230022022020319924631723359676947224",
+                    "9102748705448520825675312345176514002019025870951818932200693737629504415602",
                 )
                 .unwrap(),
             );
             let py = Fr::from(
                 BigUint::from_str(
-                    "917696706299601920847965073366118878832337776859300472447868491055982",
+                    "20873519653512271756414217005481612586070404333932963586433799949882748618991",
                 )
                 .unwrap(),
             );
@@ -615,9 +615,9 @@ mod ecfft_curve_params_utils {
         #[test]
         fn test_find_coset_for_sw() {
             let param_a_str =
-                "2125753088427212854352924174339172498722499297750753614229533284661082";
+                "13525369009256184232581429018590412183438692616651058021776068114908837964474";
             let param_b_str =
-                "3303427382072851929105738691313541325219445842218525662544269869787589";
+                "18944705127795713747740534479415798471647214051370467611230431453826282142401";
 
             let coset = find_coset_for_sw(param_a_str, param_b_str);
             println!("coset {:?}", coset);
@@ -627,20 +627,20 @@ mod ecfft_curve_params_utils {
 
 #[cfg(test)]
 mod ecfft_properties {
-    use super::build_sect_ecfft_tree;
+    use super::build_bn254_ecfft_tree;
 
     #[test]
     fn test_subtree() {
         let base_log_n = 7;
         let num_constraints = 1 << 6;
-        let tree2n = build_sect_ecfft_tree(num_constraints * 2, false, base_log_n, false).unwrap();
+        let tree2n = build_bn254_ecfft_tree(num_constraints * 2, false, base_log_n, false).unwrap();
         let tree2n_subtree = tree2n.subtree_with_size(num_constraints);
-        let treen = build_sect_ecfft_tree(num_constraints, false, base_log_n, false).unwrap();
+        let treen = build_bn254_ecfft_tree(num_constraints, false, base_log_n, false).unwrap();
         assert_eq!(tree2n_subtree.f.leaves(), treen.f.leaves()); // assertion passes
 
-        let tree2n = build_sect_ecfft_tree(num_constraints * 2, true, base_log_n, false).unwrap();
+        let tree2n = build_bn254_ecfft_tree(num_constraints * 2, true, base_log_n, false).unwrap();
         let tree2n_subtree = tree2n.subtree_with_size(num_constraints);
-        let treen = build_sect_ecfft_tree(num_constraints, true, base_log_n, false).unwrap();
+        let treen = build_bn254_ecfft_tree(num_constraints, true, base_log_n, false).unwrap();
         assert_eq!(tree2n_subtree.f.leaves(), treen.f.leaves()); // assertion fails
     }
 }
@@ -649,7 +649,7 @@ mod ecfft_properties {
 mod test {
     use std::path::Path;
 
-    use super::{build_sect_ecfft_tree, compute_lagrange_basis_at_tau};
+    use super::{build_bn254_ecfft_tree, compute_lagrange_basis_at_tau};
     use crate::artifacts::TREE_2N;
     use crate::curve::Fr;
     use crate::ec_fft::{
@@ -673,7 +673,7 @@ mod test {
         let n = 1 << n_log;
 
         println!("Building FFTree (fftree_n) of size {} for EcfftFp...", n);
-        let fftree_2n = build_sect_ecfft_tree(2 * n, false, n_log as usize + 1, false)
+        let fftree_2n = build_bn254_ecfft_tree(2 * n, false, n_log as usize + 1, false)
             .expect("Failed to build fftree_n");
         println!("FFTree (fftree_n) built successfully.");
         let fftree_n = fftree_2n.subtree_with_size(n);
@@ -787,7 +787,7 @@ mod test {
         let n_log = 4u32; //  N = 16   (fits in a few ms)
         let n = 1 << n_log;
 
-        let fftree2n = build_sect_ecfft_tree(2 * n, false, n_log as usize + 1, false)
+        let fftree2n = build_bn254_ecfft_tree(2 * n, false, n_log as usize + 1, false)
             .expect("cannot build FFTree");
         let fftree = fftree2n.subtree_with_size(n);
         let domain_s = fftree.f.leaves(); // &[F; N]
@@ -821,9 +821,9 @@ mod test {
         let n_log = 4u32; //  N = 16   (fits in a few ms)
         let n = 1 << n_log;
 
-        let fftree_2n = build_sect_ecfft_tree(n * 2, false, n_log as usize + 1, false)
+        let fftree_2n = build_bn254_ecfft_tree(n * 2, false, n_log as usize + 1, false)
             .expect("cannot build FFTree");
-        let fftree_n = build_sect_ecfft_tree(n, false, n_log as usize + 1, false)
+        let fftree_n = build_bn254_ecfft_tree(n, false, n_log as usize + 1, false)
             .expect("cannot build FFTree");
 
         let vanishing_poly = compute_vanishing_polynomial(&fftree_2n).unwrap();
@@ -884,9 +884,9 @@ mod test {
         let n_log = 4u32; //  N = 16   (fits in a few ms)
         let domain_len = 1 << n_log;
 
-        let fftree_2n = build_sect_ecfft_tree(2 * domain_len, false, n_log as usize + 1, false)
+        let fftree_2n = build_bn254_ecfft_tree(2 * domain_len, false, n_log as usize + 1, false)
             .expect("cannot build FFTree");
-        let fftree_2nd = build_sect_ecfft_tree(2 * domain_len, true, n_log as usize + 1, false)
+        let fftree_2nd = build_bn254_ecfft_tree(2 * domain_len, true, n_log as usize + 1, false)
             .expect("cannot build FFTree");
         let fftree_nd = fftree_2nd.subtree_with_size(domain_len);
 
@@ -941,7 +941,7 @@ mod test {
         let n_log = 4u32; //  N = 16   (fits in a few ms)
         let n = 1 << n_log;
 
-        let fftreen = build_sect_ecfft_tree(2 * n, false, n_log as usize + 1, false)
+        let fftreen = build_bn254_ecfft_tree(2 * n, false, n_log as usize + 1, false)
             .expect("cannot build FFTree");
         let domain_s = fftreen.f.leaves(); // &[F; N]
         let (e0, domain_s): (Vec<Fr>, Vec<Fr>) = domain_s.chunks(2).map(|e| (e[0], e[1])).unzip();
@@ -955,7 +955,7 @@ mod test {
         }
 
         // --- fast ECFFT implementation ------------------------------------
-        let fftree2n = build_sect_ecfft_tree(2 * n, true, n_log as usize + 1, false)
+        let fftree2n = build_bn254_ecfft_tree(2 * n, true, n_log as usize + 1, false)
             .expect("cannot build FFTree");
         // let fftree2n_sub = fftree2n.subtree_with_size(n);
         let domain_sd = fftree2n.subtree_with_size(n).f.leaves();
@@ -985,11 +985,11 @@ mod test {
         let num_constraints = 1 << n_log;
 
         let tree2n =
-            build_sect_ecfft_tree(num_constraints * 2, false, n_log as usize + 1, false).unwrap();
+            build_bn254_ecfft_tree(num_constraints * 2, false, n_log as usize + 1, false).unwrap();
         let tree2nd =
-            build_sect_ecfft_tree(num_constraints * 2, true, n_log as usize + 1, false).unwrap();
+            build_bn254_ecfft_tree(num_constraints * 2, true, n_log as usize + 1, false).unwrap();
         let tree4n =
-            build_sect_ecfft_tree(num_constraints * 2 * 2, false, n_log as usize + 1, false)
+            build_bn254_ecfft_tree(num_constraints * 2 * 2, false, n_log as usize + 1, false)
                 .unwrap();
 
         let z_poly = compute_vanishing_polynomial(&tree2n).unwrap();
@@ -1043,8 +1043,8 @@ mod test {
     fn test_union_of_sub_tree_leaves() {
         let n_log: usize = 3;
         let num_constraints = 1 << n_log;
-        let tree2n = build_sect_ecfft_tree(num_constraints * 2, false, n_log + 1, false).unwrap();
-        let tree2nd = build_sect_ecfft_tree(num_constraints * 2, true, n_log + 1, false).unwrap();
+        let tree2n = build_bn254_ecfft_tree(num_constraints * 2, false, n_log + 1, false).unwrap();
+        let tree2nd = build_bn254_ecfft_tree(num_constraints * 2, true, n_log + 1, false).unwrap();
         let treen_leaves = tree2n.subtree_with_size(num_constraints).f.leaves();
         let treend_leaves = tree2nd.subtree_with_size(num_constraints).f.leaves();
 
@@ -1057,7 +1057,7 @@ mod test {
     fn test_evaluate_lagrange_coeffs_using_precompute2() {
         let n_log: usize = 6;
         let domain_len = 1 << n_log;
-        let fftree_2n = build_sect_ecfft_tree(domain_len, false, n_log + 1, false).unwrap();
+        let fftree_2n = build_bn254_ecfft_tree(domain_len, false, n_log + 1, false).unwrap();
         let mut rng = thread_rng();
         let tau = Fr::rand(&mut rng);
 
