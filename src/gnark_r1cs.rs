@@ -244,7 +244,7 @@ pub(crate) mod sparse_verify_r1cs {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct R1CSInstance {
     pub num_constraints: usize,   // #constraints raised to the power of 2
     pub num_public_inputs: usize, // #public inputs (excl. leading 1)

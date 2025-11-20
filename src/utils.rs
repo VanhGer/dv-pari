@@ -51,7 +51,7 @@ pub(crate) fn msm_double_decompose(k1: Fr, k2: Fr) -> (Decomp, Decomp, Decomp) {
     lll_bignum(&mut matrix, 0.501, 0.99);
 
     // Check solution
-    let bounded = Integer::from(1) << 155; // ~ 1.22r^{2/3}
+    let bounded = Integer::from(1) << 170; // ~ 1.22r^{2/3}
     let mut sol = 0;
     let (mut x1, mut x2, mut z) = (
         matrix[sol].index(0),
@@ -99,7 +99,7 @@ pub(crate) fn msb_bit(scalar: &Fr, bit_id: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use crate::curve::Fr;
-    use ark_ff::{AdditiveGroup, BigInt};
+    use ark_ff::{AdditiveGroup, BigInt, BigInteger, PrimeField};
     use ark_std::UniformRand;
     use ark_std::rand::thread_rng;
 
@@ -107,19 +107,39 @@ mod tests {
     fn test_msm_double_decompose() {
         let mut rng = thread_rng();
         let scalars: Vec<Fr> = (0..2000).map(|_| Fr::rand(&mut rng)).collect();
+        let mut pri = false;
         for ks in scalars.chunks(2) {
             let k1 = ks[0];
             let k2 = ks[1];
-            let (x1, x2, z) = super::msm_double_decompose(k1, k2);
+            let (decomp_x1, decomp_x2, decomp_z) = super::msm_double_decompose(k1, k2);
 
-            let x1 = if x1.1 { -x1.0 } else { x1.0 };
-            let x2 = if x2.1 { -x2.0 } else { x2.0 };
-            let z = if z.1 { -z.0 } else { z.0 };
+            let x1 = if decomp_x1.1 { -decomp_x1.0 } else { decomp_x1.0 };
+            let x2 = if decomp_x2.1 { -decomp_x2.0 } else { decomp_x2.0 };
+            let z = if decomp_z.1 { -decomp_z.0 } else { decomp_z.0 };
             let result1 = k1 * z - x1;
             let result2 = k2 * z - x2;
             assert_eq!(result1, Fr::ZERO);
             assert_eq!(result2, Fr::ZERO);
+            if !pri && !decomp_x1.1 && !decomp_x2.1 && decomp_z.1 {
+                println!("k1: {:?}", k1.into_bigint().to_bytes_be());
+                println!("k2: {:?}", k2.into_bigint().to_bytes_be());
+                println!("x1: {:?}", x1.into_bigint().to_bytes_be());
+                println!("x2: {:?}", x2.into_bigint().to_bytes_be());
+                println!("z: {:?}", decomp_z.0.into_bigint().to_bytes_be());
+                pri = true;
+            }
+
         }
+    }
+    
+    #[test]
+    fn dummy() {
+        let mut rng = thread_rng();
+        let scalars: Vec<Fr> = (0..2).map(|_| Fr::rand(&mut rng)).collect();
+        println!("scalars: {:?}", scalars[0]);
+        let d = scalars[0].into_bigint().to_bytes_be();
+        let dd = Fr::from_be_bytes_mod_order(&d);
+        println!("dd: {:?}", dd);
     }
 
     #[test]

@@ -445,7 +445,7 @@ mod test {
 
     use crate::{
         curve::Fr,
-        ec_fft::build_sect_ecfft_tree,
+        ec_fft::build_bn254_ecfft_tree,
         tree_io::{read_minimal_fftree_from_file, write_fftree_to_file},
     };
 
@@ -486,7 +486,7 @@ mod test {
         let num_constraints: usize = 1 << 6;
         let base_log_n = num_constraints.ilog2() as usize + 1;
         let tree2n: FFTree<Fr> =
-            build_sect_ecfft_tree(num_constraints * 2, false, base_log_n, false).unwrap();
+            build_bn254_ecfft_tree(num_constraints * 2, false, base_log_n, false).unwrap();
         let num_constrants: usize = tree2n.f.leaves().len() / 2;
         let mut evals = Vec::with_capacity(num_constrants);
         for _ in 0..num_constrants {

@@ -90,7 +90,7 @@ pub(crate) fn write_point_vec_to_file<P: AsRef<Path>>(
     let len = points.len() as u64;
     f.write_all(&len.to_le_bytes())?;
 
-    // 2. points (λ-encoded)
+    // 2. points
     let serialized_points: Vec<Result<Vec<u8>, anyhow::Error>> = points
         .par_iter()
         .map(|p| {
@@ -124,7 +124,7 @@ pub(crate) fn read_fr_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<V
     let file = File::open(path).context("Failed to open file")?;
     // Safety: Creating a memory map is unsafe. Ensure file isn't truncated/modified while mapped.
     let mmap = unsafe { Mmap::map(&file)? };
-    const FR_UNCOMPRESSED_SIZE: usize = 29;
+    const FR_UNCOMPRESSED_SIZE: usize = 32;
     let mut current_pos = 0;
 
     // 1. Length prefix from mmap
@@ -188,7 +188,7 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
     let file = File::open(path).context("Failed to open file")?;
     // Safety: Creating a memory map is unsafe. Ensure file isn't truncated/modified while mapped.
     let mmap = unsafe { Mmap::map(&file)? };
-    const PT_LAMBDA_SIZE: usize = 60;
+    const PT_SIZE: usize = 96;
     let mut current_pos = 0;
 
     // 1. Length prefix from mmap
@@ -205,7 +205,7 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
     }
 
     // 2. Point data from mmap
-    let expected_data_end = current_pos + (len * PT_LAMBDA_SIZE);
+    let expected_data_end = current_pos + (len * PT_SIZE);
     if mmap.len() < expected_data_end {
         return Err(anyhow::anyhow!(
             "File too short for expected point data (compressed)"
@@ -215,16 +215,12 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
 
     // 3. Parallelize deserialization from the mmap slice
     let points_results: Vec<Result<CurvePoint, anyhow::Error>> = all_point_data_slice
-        .par_chunks_exact(PT_LAMBDA_SIZE)
+        .par_chunks_exact(PT_SIZE)
         .map(|chunk| {
-            let mut bytes = [0u8; PT_LAMBDA_SIZE];
+            let mut bytes = [0u8; PT_SIZE];
             bytes.copy_from_slice(chunk);
-            let (pt, valid) = CurvePoint::from_bytes(&bytes);
-            if !valid {
-                Err(anyhow::anyhow!("Invalid lambda encoding for curve point"))
-            } else {
-                Ok(pt)
-            }
+            let pt= CurvePoint::from_bytes(&bytes);
+            Ok(pt)
         })
         .collect();
 
@@ -244,8 +240,9 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
 #[cfg(test)]
 mod test {
     use std::env::temp_dir;
-
-    use xs233_sys::{xsk233_generator, xsk233_neutral};
+    use ark_bn254::G1Projective;
+    use ark_ec::PrimeGroup;
+    use ark_ff::AdditiveGroup;
 
     use crate::curve::CurvePoint;
 
@@ -254,18 +251,16 @@ mod test {
     // Verifies that IO operations yield the original elements
     #[test]
     fn test_points_match_after_write_and_read() {
-        unsafe {
-            let pts = vec![
-                CurvePoint(xsk233_generator),
-                CurvePoint(xsk233_neutral),
-                CurvePoint(xsk233_generator),
-                CurvePoint(xsk233_neutral),
-            ];
-            let mut path = temp_dir();
-            path.push("test_test_read_write_points");
-            write_point_vec_to_file(path.clone(), &pts).unwrap();
-            let pts2 = read_point_vec_from_file(path).unwrap();
-            assert_eq!(pts, pts2);
-        }
+        let pts = vec![
+            CurvePoint(G1Projective::ZERO),
+            CurvePoint(G1Projective::generator()),
+            CurvePoint(G1Projective::ZERO),
+            CurvePoint(G1Projective::generator()),
+        ];
+        let mut path = temp_dir();
+        path.push("test_test_read_write_points");
+        write_point_vec_to_file(path.clone(), &pts).unwrap();
+        let pts2 = read_point_vec_from_file(path).unwrap();
+        assert_eq!(pts, pts2);
     }
 }

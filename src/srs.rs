@@ -8,7 +8,7 @@ use crate::artifacts::{
 };
 use crate::curve::{CurvePoint, Fr, hinted_multi_scalar_mul, point_scalar_mul_gen};
 use crate::ec_fft::{
-    build_sect_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
+    build_bn254_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
     evaluate_vanishing_poly_at_domain,
 };
@@ -19,7 +19,7 @@ use crate::io_utils::{read_fr_vec_from_file, write_fr_vec_to_file, write_point_v
 use crate::proving::{Proof, Transcript};
 use crate::tree_io::{read_fftree_from_file, write_fftree_to_file};
 use anyhow::{Context, Result};
-use ark_ff::{Field, One, Zero};
+use ark_ff::{AdditiveGroup, Field, One, Zero};
 use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -30,7 +30,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::join;
 use std::fs::File;
 use std::path::Path;
-use xs233_sys::xsk233_neutral;
+use ark_bn254::G1Projective;
 
 /// Structured Reference String
 #[derive(Clone, Debug)]
@@ -245,7 +245,7 @@ impl SRS {
                 read_fftree_from_file(&path)
             } else {
                 println!("Computing {:?} …", path.display());
-                let tree = build_sect_ecfft_tree(num_leaves, odd_leaves, n_log + 1, false).unwrap();
+                let tree = build_bn254_ecfft_tree(num_leaves, odd_leaves, n_log + 1, false).unwrap();
                 write_fftree_to_file(&tree, &path)?;
                 Ok(tree)
             }
@@ -467,9 +467,11 @@ impl SRS {
         public_inputs: &[Fr], // See: test_public_inputs_hash to understand how bridge public inputs will be passed to this function later
         proof: &Proof,
     ) -> bool {
-        // Proof stores curve points in Lopez–Dahab λ form, so reconstruct them before verification
-        let (proof_commit_p, is_commit_p_valid) = CurvePoint::from_lambda(&proof.commit_p);
-        let (proof_kzg_k, is_kzg_k_valid) = CurvePoint::from_lambda(&proof.kzg_k);
+        // Get proof points
+        let proof_commit_p= proof.commit_p;
+        let commit_p_valid = proof_commit_p.checked();
+        let proof_kzg_k = proof.kzg_k;
+        let kzg_k_valid = proof_kzg_k.checked();
 
         let fs_challenge_alpha = {
             let mut transcript = Transcript::default();
@@ -542,10 +544,7 @@ impl SRS {
             },
         ];
         let lhs = hinted_multi_scalar_mul(&scalars, &points);
-        let rhs = unsafe {
-            let zero = xsk233_neutral;
-            CurvePoint(zero)
-        };
+        let rhs = CurvePoint(G1Projective::ZERO);
 
         // check k1 = x1/z mod r and k2 = x2/z mod r
         let z = if z_neg { -proof_z } else { proof_z };
@@ -556,11 +555,11 @@ impl SRS {
 
         let all_inputs_valid = is_a0_valid
             && is_b0_valid
-            && is_commit_p_valid
-            && is_kzg_k_valid
             && is_x1_valid
             && is_x2_valid
-            && is_z_valid;
+            && is_z_valid
+            && commit_p_valid
+            && kzg_k_valid;
         let valid_proof = lhs == rhs;
         let valid_decomposition = is_k1_valid & is_k2_valid;
         valid_proof & all_inputs_valid & valid_decomposition
