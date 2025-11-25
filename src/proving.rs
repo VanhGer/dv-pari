@@ -4,7 +4,7 @@ use crate::artifacts::{
     BAR_WTS, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q, TREE_2N,
     TREE_N, TREE_ND, Z_POLY, Z_VALS2_INV,
 };
-use crate::curve::{CurvePoint, Fr, FrBits, multi_scalar_mul};
+use crate::curve::{CurvePoint, Fr, FrBits, multi_scalar_mul, fr_as_montgomery, fr_from_montgomery};
 use crate::ec_fft::{
     build_bn254_ecfft_tree, compute_barycentric_weights,
     evaluate_poly_at_alpha_using_barycentric_weights, evaluate_vanishing_poly_at_domain,
@@ -33,20 +33,19 @@ use std::path::Path;
 ///
 /// # Fields
 ///
-/// * `commit_p`: Commitment to Witness and Quotient Polynomials (Lopez–Dahab λ form)
-/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge (λ form)
-/// * `a0`: Witness polynomial a(X) evaluated at challenge
-/// * `b0`: Witness polynomial b(X) evaluated at challenge
-/// * `i0`: Public Input polynomial i(X) evaluated at challenge
+/// * `commit_p`: Commitment to Witness and Quotient Polynomials (Montgomery form)
+/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge (Montgomery form)
+/// * `a0`: Witness polynomial a(X) evaluated at challenge, in Montgomery form
+/// * `b0`: Witness polynomial b(X) evaluated at challenge, in Montgomery form
 ///
 /// We require the proof to be of small size, so we represent the data in compressed form
 // Total Size =
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
     /// commit_p
-    pub commit_p: CurvePoint,
+    pub mont_commit_p: CurvePoint,
     /// kzg_k
-    pub kzg_k: CurvePoint,
+    pub mont_kzg_k: CurvePoint,
     /// a0
     pub a0: FrBits,
     /// b0
@@ -171,7 +170,7 @@ impl Transcript {
             for pubin in public_inputs {
                 let pubin_uint: BigUint = pubin.into_bigint().into();
                 let mut bytes = pubin_uint.to_bytes_le();
-                bytes.resize(232 / 8, 0);
+                bytes.resize(256 / 8, 0);
                 buf.append(&mut bytes);
             }
             let buf_hash = blake3::hash(&buf);
@@ -206,12 +205,11 @@ impl Transcript {
 
         let mut root_hash_bytes = *root_hash.as_bytes();
         // truncate msb
-        root_hash_bytes[28..].copy_from_slice(&[0, 0, 0, 0]); // mask top 4 bytes, 256-32=224 bits
+        root_hash_bytes[31..].copy_from_slice(&[0]); // mask top 1 byte, 256-8=248 bits
 
         // deserialize bytes in little-endian format to BigUint
         let bigu = BigUint::from_bytes_le(&root_hash_bytes);
-        // 224 bits fits well in 232 bit scalar field cleanly, so doesn't wrap around
-
+        // 248 bits fits well in 254 bit scalar field cleanly, so doesn't wrap around
         Fr::from(bigu)
     }
 }
@@ -484,7 +482,14 @@ impl Proof {
             println!("Include circuit and public input in trascript");
             // empty to reduce time
             transcript.circuit_info_hash(&inst);
-            transcript.public_input_hash(&public_inputs);
+            // hash the montgomery form of public inputs
+            let mont_public_inputs: Vec<Fr> = public_inputs
+                .iter()
+                .map(|x| {
+                    fr_as_montgomery(x)
+                })
+                .collect();
+            transcript.public_input_hash(&mont_public_inputs);
             (msm_gm, evals, inst.num_constraints)
         };
 
@@ -533,7 +538,8 @@ impl Proof {
         };
 
         let commit_p = CurvePoint::add(msm_q, msm_gm);
-        transcript.witness_commitment_hash(&[commit_p]);
+        let mont_commit_p = commit_p.as_montgomery();
+        transcript.witness_commitment_hash(&[mont_commit_p]);
 
         {
             let srs = SRS::empty();
@@ -561,7 +567,7 @@ impl Proof {
         }
 
         // Fiat-Shamir challenge
-        let alpha = {
+        let mont_alpha = {
             let alpha = transcript.output();
 
             assert!(
@@ -575,6 +581,7 @@ impl Proof {
             );
             alpha
         };
+        let alpha = fr_from_montgomery(&mont_alpha);
 
         println!("evaluate witness polynomials at challenge");
         let (a0, b0, r0) = {
@@ -697,12 +704,15 @@ impl Proof {
 
         println!("msm g_k");
         let kzg_k = multi_scalar_mul(&srs_s_k, &srs_g_k);
+        let mont_kzg_k = kzg_k.as_montgomery();
+        let mont_a0 = fr_as_montgomery(&a0);
+        let mont_b0 = fr_as_montgomery(&b0);
 
         Self {
-            commit_p,
-            kzg_k,
-            a0: FrBits::from_fr(a0),
-            b0: FrBits::from_fr(b0),
+            mont_commit_p,
+            mont_kzg_k,
+            a0: FrBits::from_fr(mont_a0),
+            b0: FrBits::from_fr(mont_b0),
         }
     }
 
@@ -714,13 +724,13 @@ impl Proof {
         }
 
         let mut commit_p: Vec<bool> = self
-            .commit_p
+            .mont_commit_p
             .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
             .collect();
         let mut kzg_k: Vec<bool> = self
-            .kzg_k
+            .mont_kzg_k
             .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
@@ -789,8 +799,8 @@ impl Proof {
         assert!(kzg_k.checked());
 
         Proof {
-            commit_p,
-            kzg_k,
+            mont_commit_p: commit_p,
+            mont_kzg_k: kzg_k,
             a0,
             b0,
         }

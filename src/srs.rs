@@ -6,7 +6,7 @@ use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
 };
-use crate::curve::{CurvePoint, Fr, point_scalar_mul_gen};
+use crate::curve::{CurvePoint, Fr, point_scalar_mul_gen, fr_as_montgomery, fr_from_montgomery};
 use crate::ec_fft::{
     build_bn254_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
@@ -468,10 +468,10 @@ impl SRS {
         proof: &Proof,
     ) -> bool {
         // Get proof points
-        let proof_commit_p= proof.commit_p;
-        let commit_p_valid = proof_commit_p.checked();
-        let proof_kzg_k = proof.kzg_k;
-        let kzg_k_valid = proof_kzg_k.checked();
+        let mont_proof_commit_p = proof.mont_commit_p;
+        let commit_p_valid = mont_proof_commit_p.from_montgomery().checked();
+        let mont_proof_kzg_k = proof.mont_kzg_k;
+        let kzg_k_valid = mont_proof_kzg_k.from_montgomery().checked();
 
         let fs_challenge_alpha = {
             let mut transcript = Transcript::default();
@@ -495,28 +495,44 @@ impl SRS {
             // The above two hashes is known at compile time and as such can be hardcoded
             // The following two has to be done in circuit
 
-            transcript.public_input_hash(&public_inputs.to_vec());
-            transcript.witness_commitment_hash(&[proof_commit_p]);
+            // transcript.public_input_hash(&public_inputs.to_vec());
+            let mont_public_inputs: Vec<Fr> = public_inputs
+                .iter()
+                .map(|x| {
+                    fr_as_montgomery(x)
+                })
+                .collect();
+            transcript.public_input_hash(&mont_public_inputs);
 
-            transcript.output()
+            transcript.witness_commitment_hash(&[mont_proof_commit_p]);
+
+            let mont_alpha = transcript.output();
+            fr_from_montgomery(&mont_alpha)
         };
 
         let i0 = evaluate_monomial_basis_poly(public_inputs, fs_challenge_alpha);
 
-        let (proof_a0, is_a0_valid) = proof.a0.to_fr();
-        let (proof_b0, is_b0_valid) = proof.b0.to_fr();
+        let (mont_proof_a0, is_a0_valid) = proof.a0.to_fr();
+        let (mont_proof_b0, is_b0_valid) = proof.b0.to_fr();
+
+        let proof_a0 = fr_from_montgomery(&mont_proof_a0);
+        let proof_b0 = fr_from_montgomery(&mont_proof_b0);
 
         let r0 = proof_a0 * proof_b0 - i0;
         // Step 3. Compute u₀ and v₀
         let delta2 = secrets.delta.square();
-        let u0 = (proof_a0 + secrets.delta * proof_b0 + delta2 * r0) * secrets.epsilon;
+        let u0 = (proof_a0 + secrets.delta * (proof_b0 + secrets.delta * r0)) * secrets.epsilon;
+
         let v0 = (secrets.tau - fs_challenge_alpha) * secrets.epsilon;
         // // Step 4. Check v₀·K == P - u₀·G;
         // println!("v0: {:?}, u0: {:?}", v0, u0);
         let now = std::time::Instant::now();
-        let lhs = crate::curve::multi_scalar_mul(&[v0, u0], &[proof_kzg_k, CurvePoint::generator()]);
+
+        let generator = CurvePoint::generator();
+        let kzg_k = mont_proof_kzg_k.from_montgomery();
+        let lhs = crate::curve::multi_scalar_mul(&[v0, u0], &[kzg_k, generator]);
         println!("Took {:?}ms to do multi_scalar_mul in verify", now.elapsed());
-        let rhs = proof_commit_p;
+        let rhs = mont_proof_commit_p.from_montgomery();
 
         // check: x_1 G + x_2Q - zP = 0, using multi_scalar_mul_with_precompute
 
