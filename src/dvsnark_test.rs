@@ -9,7 +9,8 @@
 #[cfg(test)]
 mod tests {
     use crate::artifacts::{R1CS_CONSTRAINTS_FILE, R1CS_WITNESS_FILE};
-    use crate::curve::Fr;
+    use crate::curve::{fr_as_montgomery, Fr};
+    use std::str::FromStr;
     use crate::proving::{
         Proof, dump_proof_to_file, prover_prepares_precomputes, read_proof_from_file,
     };
@@ -148,19 +149,33 @@ mod tests {
 
         // public and private inputs
         let public_inputs: Vec<Fr> = vec![o, w];
+        let mont_public_inputs: Vec<Fr> = public_inputs
+            .iter()
+            .map(|x| {
+                fr_as_montgomery(x)
+            })
+            .collect();
         let witness = vec![y, z, x, t, s];
 
         let mut buf = Vec::new();
-        public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
+        mont_public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
         let mut file = File::create("srs_verifier_small_tmp/public_inputs.bin").unwrap();
         file.write_all(&buf).unwrap();
 
-        let mut rng = ChaCha20Rng::seed_from_u64(1);
+        let mut rng = ChaCha20Rng::seed_from_u64(11);
         let trapdoor = Trapdoor {
             tau: Fr::rand(&mut rng),
             delta: Fr::rand(&mut rng),
             epsilon: Fr::rand(&mut rng),
         };
+        let mont_trapdoor = Trapdoor {
+            tau: fr_as_montgomery(&trapdoor.tau),
+            delta: fr_as_montgomery(&trapdoor.delta),
+            epsilon: fr_as_montgomery(&trapdoor.epsilon),
+        };
+        let mut buf = Vec::new();
+        mont_trapdoor.serialize_compressed(&mut buf).unwrap();
+        std::fs::write("srs_verifier_small_tmp/trapdoor.bin", &buf).unwrap();
 
         // Run SRS setup assuming nothing is precomputed
         let _ = SRS::verifier_runs_setup(
@@ -171,10 +186,6 @@ mod tests {
             true,
         )
         .unwrap();
-
-        let mut buf = Vec::new();
-        trapdoor.serialize_compressed(&mut buf).unwrap();
-        std::fs::write("srs_verifier_small_tmp/trapdoor.bin", &buf).unwrap();
 
         // Prover precomputes stuff he needs for proving
         // These precomputes can be reused for different proof generations
@@ -211,8 +222,14 @@ mod tests {
         let priv_fr = wit_fr[1 + num_public_inputs..].to_vec();
         let public_inputs = wit_fr[1..1 + num_public_inputs].to_vec();
 
+        let mont_public_inputs: Vec<Fr> = public_inputs
+            .iter()
+            .map(|x| {
+                fr_as_montgomery(x)
+            })
+            .collect();
         let mut buf = Vec::new();
-        public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
+        mont_public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
         let mut file = File::create("groth16/public_inputs.bin").unwrap();
         file.write_all(&buf).unwrap();
 
@@ -228,8 +245,13 @@ mod tests {
             epsilon: Fr::rand(&mut rng),
         };
 
+        let mont_trapdoor = Trapdoor {
+            tau: fr_as_montgomery(&trapdoor.tau),
+            delta: fr_as_montgomery(&trapdoor.delta),
+            epsilon: fr_as_montgomery(&trapdoor.epsilon),
+        };
         let mut buf = Vec::new();
-        trapdoor.serialize_compressed(&mut buf).unwrap();
+        mont_trapdoor.serialize_compressed(&mut buf).unwrap();
         std::fs::write("groth16/trapdoor.bin", &buf).unwrap();
 
         // verifier runs setup assuming `artifacts::DOMAIN_SPECIFIC_PRECOMPUTES` are present inside `cache_dir`

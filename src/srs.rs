@@ -6,7 +6,7 @@ use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
 };
-use crate::curve::{CurvePoint, Fr, hinted_multi_scalar_mul, point_scalar_mul_gen};
+use crate::curve::{CurvePoint, Fr, hinted_multi_scalar_mul, point_scalar_mul_gen, fr_as_montgomery, fr_from_montgomery};
 use crate::ec_fft::{
     build_bn254_ecfft_tree, compute_barycentric_weights, compute_lagrange_basis_at_tau,
     compute_lagrange_basis_at_tau_over_unified_domain, compute_vanishing_polynomial,
@@ -468,10 +468,10 @@ impl SRS {
         proof: &Proof,
     ) -> bool {
         // Get proof points
-        let proof_commit_p= proof.commit_p;
-        let commit_p_valid = proof_commit_p.checked();
-        let proof_kzg_k = proof.kzg_k;
-        let kzg_k_valid = proof_kzg_k.checked();
+        let proof_mont_commit_p = proof.mont_commit_p;
+        let commit_p_valid = proof_mont_commit_p.from_montgomery().checked();
+        let proof_mont_kzg_k = proof.mont_kzg_k;
+        let kzg_k_valid = proof_mont_kzg_k.from_montgomery().checked();
 
         let fs_challenge_alpha = {
             let mut transcript = Transcript::default();
@@ -495,16 +495,26 @@ impl SRS {
             // The above two hashes is known at compile time and as such can be hardcoded
             // The following two has to be done in circuit
 
-            transcript.public_input_hash(&public_inputs.to_vec());
-            transcript.witness_commitment_hash(&[proof_commit_p]);
+            let mont_public_inputs: Vec<Fr> = public_inputs
+                .iter()
+                .map(|x| {
+                    fr_as_montgomery(x)
+                })
+                .collect();
+            transcript.public_input_hash(&mont_public_inputs);
+            transcript.witness_commitment_hash(&[proof_mont_commit_p]);
 
-            transcript.output()
+            let mont_alpha = transcript.output();
+            fr_from_montgomery(&mont_alpha)
         };
 
         let i0 = evaluate_monomial_basis_poly(public_inputs, fs_challenge_alpha);
 
-        let (proof_a0, is_a0_valid) = proof.a0.to_fr();
-        let (proof_b0, is_b0_valid) = proof.b0.to_fr();
+        let (mont_proof_a0, is_a0_valid) = proof.mont_a0.to_fr();
+        let (mont_proof_b0, is_b0_valid) = proof.mont_b0.to_fr();
+        let proof_a0 = fr_from_montgomery(&mont_proof_a0);
+        let proof_b0 = fr_from_montgomery(&mont_proof_b0);
+
         let (proof_x1, is_x1_valid) = proof.x1.0.to_fr();
         let x1_neg = proof.x1.1;
         let (proof_x2, is_x2_valid) = proof.x2.0.to_fr();
@@ -514,17 +524,10 @@ impl SRS {
 
         let r0 = proof_a0 * proof_b0 - i0;
         // Step 3. Compute u₀ and v₀
-        let delta2 = secrets.delta.square();
-        let u0 = (proof_a0 + secrets.delta * proof_b0 + delta2 * r0) * secrets.epsilon;
+        let u0 = (proof_a0 + secrets.delta * (proof_b0 + secrets.delta * r0)) * secrets.epsilon;
         let v0 = (secrets.tau - fs_challenge_alpha) * secrets.epsilon;
-        // // Step 4. Check v₀·K == P - u₀·G;
-        // println!("v0: {:?}, u0: {:?}", v0, u0);
-        // let now = std::time::Instant::now();
-        // let lhs = multi_scalar_mul(&[v0, u0], &[proof_kzg_k, CurvePoint::generator()]);
-        // println!("Took {:?}ms to do multi_scalar_mul in verify", now.elapsed());
-        // let rhs = proof_commit_p;
 
-        // check: x_1 G + x_2Q - zP = 0, using multi_scalar_mul_with_precompute
+        // Step 4. Check: x_1 G + x_2Q - zP = 0, using multi_scalar_mul_with_precompute
         let scalars = vec![proof_x1, proof_x2, proof_z];
         let points = vec![
             if x1_neg {
@@ -533,14 +536,14 @@ impl SRS {
                 CurvePoint::generator()
             },
             if x2_neg {
-                proof_kzg_k.negate()
+                proof_mont_kzg_k.from_montgomery().negate()
             } else {
-                proof_kzg_k
+                proof_mont_kzg_k.from_montgomery()
             },
             if z_neg {
-                proof_commit_p
+                proof_mont_commit_p.from_montgomery()
             } else {
-                proof_commit_p.negate()
+                proof_mont_commit_p.negate().from_montgomery()
             },
         ];
         let lhs = hinted_multi_scalar_mul(&scalars, &points);

@@ -4,7 +4,7 @@ use crate::artifacts::{
     BAR_WTS, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q, TREE_2N,
     TREE_N, TREE_ND, Z_POLY, Z_VALS2_INV,
 };
-use crate::curve::{CurvePoint, Fr, FrBits, multi_scalar_mul};
+use crate::curve::{CurvePoint, Fr, FrBits, multi_scalar_mul, fr_as_montgomery, fr_from_montgomery, point_scalar_mul};
 use crate::ec_fft::{
     build_bn254_ecfft_tree, compute_barycentric_weights,
     evaluate_poly_at_alpha_using_barycentric_weights, evaluate_vanishing_poly_at_domain,
@@ -14,7 +14,7 @@ use crate::gnark_r1cs::{R1CSInstance, evaluate_monomial_basis_poly};
 use crate::io_utils::{read_fr_vec_from_file, read_point_vec_from_file, write_fr_vec_to_file};
 use crate::srs::{SRS, Trapdoor};
 use crate::tree_io::{read_fftree_from_file, read_minimal_fftree_from_file, write_fftree_to_file};
-use crate::utils::msm_double_decompose;
+use crate::utils::{msm_double_decompose};
 use anyhow::{Context, Result};
 use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ark_poly::univariate::DensePolynomial;
@@ -34,25 +34,27 @@ use std::path::Path;
 ///
 /// # Fields
 ///
-/// * `commit_p`: Commitment to Witness and Quotient Polynomials (Lopez–Dahab λ form)
-/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge (λ form)
-/// * `a0`: Witness polynomial a(X) evaluated at challenge
-/// * `b0`: Witness polynomial b(X) evaluated at challenge
-/// * `i0`: Public Input polynomial i(X) evaluated at challenge
+/// * `commit_p`: Commitment to Witness and Quotient Polynomials (Montgomery form)
+/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge (Montgomery form)
+/// * `a0`: Witness polynomial a(X) evaluated at challenge, in Montgomery form
+/// * `b0`: Witness polynomial b(X) evaluated at challenge, in Montgomery form
+/// * `x1`: Decomposed scalar and negative flag for hinted double scalar multiplication
+/// * `x2`: Decomposed scalar and negative flag for hinted double scalar multiplication
+/// * `z`: Decomposed scalar and negative flag for hinted double scalar multiplication
 ///
 /// We require the proof to be of small size, so we represent the data in compressed form
 // Total Size =
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
     /// commit_p
-    pub commit_p: CurvePoint,
+    pub mont_commit_p: CurvePoint,
     /// kzg_k
-    pub kzg_k: CurvePoint,
+    pub mont_kzg_k: CurvePoint,
     /// a0
-    pub a0: FrBits,
+    pub mont_a0: FrBits,
     /// b0
-    pub b0: FrBits,
-    /// x1, x2, z for optimize MSM
+    pub mont_b0: FrBits,
+    /// x1
     pub x1: (FrBits, bool),
     /// x2
     pub x2: (FrBits, bool),
@@ -178,7 +180,7 @@ impl Transcript {
             for pubin in public_inputs {
                 let pubin_uint: BigUint = pubin.into_bigint().into();
                 let mut bytes = pubin_uint.to_bytes_le();
-                bytes.resize(232 / 8, 0);
+                bytes.resize(256 / 8, 0);
                 buf.append(&mut bytes);
             }
             let buf_hash = blake3::hash(&buf);
@@ -213,11 +215,11 @@ impl Transcript {
 
         let mut root_hash_bytes = *root_hash.as_bytes();
         // truncate msb
-        root_hash_bytes[28..].copy_from_slice(&[0, 0, 0, 0]); // mask top 4 bytes, 256-32=224 bits
+        root_hash_bytes[31..].copy_from_slice(&[0]); // mask top 1 byte, 256-8=248 bits
 
         // deserialize bytes in little-endian format to BigUint
         let bigu = BigUint::from_bytes_le(&root_hash_bytes);
-        // 224 bits fits well in 232 bit scalar field cleanly, so doesn't wrap around
+        // 248 bits fits well in 254 bit scalar field cleanly, so doesn't wrap around
 
         Fr::from(bigu)
     }
@@ -491,7 +493,14 @@ impl Proof {
             println!("Include circuit and public input in trascript");
             // empty to reduce time
             transcript.circuit_info_hash(&inst);
-            transcript.public_input_hash(&public_inputs);
+            // hash the montgomery form of public inputs
+            let mont_public_inputs: Vec<Fr> = public_inputs
+                .iter()
+                .map(|x| {
+                    fr_as_montgomery(x)
+                })
+                .collect();
+            transcript.public_input_hash(&mont_public_inputs);
             (msm_gm, evals, inst.num_constraints)
         };
 
@@ -540,7 +549,8 @@ impl Proof {
         };
 
         let commit_p = CurvePoint::add(msm_q, msm_gm);
-        transcript.witness_commitment_hash(&[commit_p]);
+        let mont_commit_p = commit_p.as_montgomery();
+        transcript.witness_commitment_hash(&[mont_commit_p]);
 
         {
             let srs = SRS::empty();
@@ -568,7 +578,7 @@ impl Proof {
         }
 
         // Fiat-Shamir challenge
-        let alpha = {
+        let mont_alpha = {
             let alpha = transcript.output();
 
             assert!(
@@ -582,6 +592,7 @@ impl Proof {
             );
             alpha
         };
+        let alpha = fr_from_montgomery(&mont_alpha);
 
         println!("evaluate witness polynomials at challenge");
         let (a0, b0, r0) = {
@@ -704,10 +715,18 @@ impl Proof {
 
         println!("msm g_k");
         let kzg_k = multi_scalar_mul(&srs_s_k, &srs_g_k);
+        let mont_kzg_k = kzg_k.as_montgomery();
+        let mont_a0 = fr_as_montgomery(&a0);
+        let mont_b0 = fr_as_montgomery(&b0);
 
         // After prover publishes commit_p, kzg_k, alpha, a0, b0, verifier reveals trapdoor.
         let buf = std::fs::read(format!("{cache_dir}/trapdoor.bin")).unwrap();
-        let trapdoor = Trapdoor::deserialize_compressed(&buf[..]).unwrap();
+        let mont_trapdoor = Trapdoor::deserialize_compressed(&buf[..]).unwrap();
+        let trapdoor = Trapdoor {
+            delta: fr_from_montgomery(&mont_trapdoor.delta),
+            epsilon: fr_from_montgomery(&mont_trapdoor.epsilon),
+            tau: fr_from_montgomery(&mont_trapdoor.tau),
+        };
         // Compute u0, v0
         let delta2 = trapdoor.delta.square();
         let u0 = (a0 + trapdoor.delta * b0 + delta2 * r0) * trapdoor.epsilon;
@@ -715,12 +734,11 @@ impl Proof {
         // Decompose
         let (x1, x2, z) = msm_double_decompose(u0, v0);
 
-        // test:
         Self {
-            commit_p,
-            kzg_k,
-            a0: FrBits::from_fr(a0),
-            b0: FrBits::from_fr(b0),
+            mont_commit_p,
+            mont_kzg_k,
+            mont_a0: FrBits::from_fr(mont_a0),
+            mont_b0: FrBits::from_fr(mont_b0),
             x1: (FrBits::from_fr(x1.0), x1.1),
             x2: (FrBits::from_fr(x2.0), x2.1),
             z: (FrBits::from_fr(z.0), z.1),
@@ -735,19 +753,19 @@ impl Proof {
         }
 
         let mut commit_p: Vec<bool> = self
-            .commit_p
+            .mont_commit_p
             .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
             .collect();
         let mut kzg_k: Vec<bool> = self
-            .kzg_k
+            .mont_kzg_k
             .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
             .collect();
-        let mut a0 = self.a0.0.to_vec();
-        let mut b0 = self.b0.0.to_vec();
+        let mut a0 = self.mont_a0.0.to_vec();
+        let mut b0 = self.mont_b0.0.to_vec();
         let mut x1 = self.x1.0.0.to_vec();
         let x1_neg = self.x1.1;
         let mut x2 = self.x2.0.0.to_vec();
@@ -842,10 +860,10 @@ impl Proof {
         assert!(kzg_k.checked());
 
         Proof {
-            commit_p,
-            kzg_k,
-            a0,
-            b0,
+            mont_commit_p: commit_p,
+            mont_kzg_k: kzg_k,
+            mont_a0: a0,
+            mont_b0: b0,
             x1,
             x2,
             z,

@@ -15,8 +15,21 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use ark_ec::{CurveGroup, PrimeGroup};
 
+const MONTGOMERY_R: &'static str =
+    "28948022309329048855892746252171976963317496166410141009864396001978282409984";
+
 /// Represents a scalar field element
 pub type Fr = ark_bn254::Fr;
+
+pub fn fr_as_montgomery(fr: &Fr) -> Fr {
+    let montgomery_r_as_biguint = BigUint::from_str(MONTGOMERY_R).unwrap();
+    *fr * Fr::from(montgomery_r_as_biguint)
+}
+
+pub fn fr_from_montgomery(fr: &Fr) -> Fr {
+    let montgomery_r_as_biguint = BigUint::from_str(MONTGOMERY_R).unwrap();
+    *fr / Fr::from(montgomery_r_as_biguint)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// 254-bit Serialized Fr
@@ -138,6 +151,24 @@ impl PartialEq for CurvePoint {
 impl Eq for CurvePoint {}
 
 impl CurvePoint {
+    pub fn as_montgomery(&self) -> Self {
+        let montgomery_r_as_biguint = BigUint::from_str(MONTGOMERY_R).unwrap();
+        Self(G1Projective {
+            x: self.0.x * Fq::from(montgomery_r_as_biguint.clone()),
+            y: self.0.y * Fq::from(montgomery_r_as_biguint.clone()),
+            z: self.0.z * Fq::from(montgomery_r_as_biguint),
+        })
+    }
+
+    pub fn from_montgomery(&self) -> Self {
+        let montgomery_r_as_biguint = BigUint::from_str(MONTGOMERY_R).unwrap();
+        Self(G1Projective {
+            x: self.0.x / Fq::from(montgomery_r_as_biguint.clone()),
+            y: self.0.y / Fq::from(montgomery_r_as_biguint.clone()),
+            z: self.0.z / Fq::from(montgomery_r_as_biguint),
+        })
+    }
+
     pub(crate) fn generator() -> Self {
         CurvePoint(G1Projective::generator())
     }
@@ -239,7 +270,7 @@ pub(crate) fn hinted_multi_scalar_mul(scalars: &[Fr], points: &[CurvePoint]) -> 
 
     // main loop
     let mut result = CurvePoint(G1Projective::ZERO);
-    for bit_id in 0..256 {
+    for bit_id in 86..256 { // x1, x2, z <= 2^170
         result = CurvePoint(result.0.double());
         let t_id: u32 = scalars
             .par_iter()
