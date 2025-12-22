@@ -202,28 +202,28 @@ pub(crate) fn build_bn254_ecfft_tree(
 ) -> Option<FFTree<Fr>> {
     // ecfft's find_curve.rs gives curve params for the necessary size of subgroup
     // for our case 28 is sufficient because we have number of constraints = ~2^23 < 2^subgroup_adic
-    let subgroup_adic = 29;
+    let subgroup_adic = 25;
     // (a, b) params in "Good Curve" form is returned by find_curve.rs
     // ecfft_curve_params_utils::get_short_weierstrass_params_from_good_curve_params converts it into SW form
     // which we hardcode below
     let curve: ShortWeierstrassCurve<Fr> = ShortWeierstrassCurve::new(
-        Fr::from_str("13525369009256184232581429018590412183438692616651058021776068114908837964474")
+        Fr::from_str("16724499638196569202260298394005814959494910410746424157114270518485433474755")
             .unwrap(),
-        Fr::from_str("18944705127795713747740534479415798471647214051370467611230431453826282142401")
+        Fr::from_str("17234435724439643600639628462667735436205737751785032589136003898712312975740")
             .unwrap(),
     );
     let subgroup_generator = Point::new(
-        Fr::from_str("18268254051851975380888516152123010311469729152936862438156057941062434653585")
+        Fr::from_str("20524107899054151687455631214408831970582884207277565183147025155048801721577")
             .unwrap(),
-        Fr::from_str("20873519653512271756414217005481612586070404333932963586433799949882748618991")
+        Fr::from_str("11536595945740734357108334546568621416663289613220638127284014354011077024571")
             .unwrap(),
         curve,
     );
     // suitable coset offset is sampled using ecfft_curve_params_utils::find_coset_for_sw
     let coset_offset = Point::new(
-        Fr::from_str("21316487044915344142485408468163314925958844547934638397731985234005641718651")
+        Fr::from_str("7161111205482330746924882571450233343858501058779759314484062173939731728489")
             .unwrap(),
-        Fr::from_str("20394002569852845607747674175048134691431975009890372301276491478648963832911")
+        Fr::from_str("6278565669065469513663472145047055448791511350972467237098436973485664893795")
             .unwrap(),
         curve,
     );
@@ -575,16 +575,16 @@ mod ecfft_curve_params_utils {
 
         #[test]
         fn test_sect_get_short_weierstrass_params_from_good_curve_params() {
-            // 2^29 subgroup order
+            // 2^25 subgroup order
             let a = Fr::from(
                 BigUint::from_str(
-                    "5608273167371088443393205675582213839803745445539096174167888423722982218332",
+                    "5952652471249144804371221388609631414843579338803654892662464393116574327448",
                 )
                 .unwrap(),
             );
             let b = Fr::from(
                 BigUint::from_str(
-                    "3742171633357136290792962594592910113557528971686787903241767133587195564333",
+                    "2013775602695420878722156608560431216124940139591405777833667966094515046965",
                 )
                 .unwrap(),
             );
@@ -592,13 +592,13 @@ mod ecfft_curve_params_utils {
 
             let px = Fr::from(
                 BigUint::from_str(
-                    "9102748705448520825675312345176514002019025870951818932200693737629504415602",
+                    "11243809451358011678583088836453196469452236294204335437693468961818007447222",
                 )
                 .unwrap(),
             );
             let py = Fr::from(
                 BigUint::from_str(
-                    "20873519653512271756414217005481612586070404333932963586433799949882748618991",
+                    "11536595945740734357108334546568621416663289613220638127284014354011077024571",
                 )
                 .unwrap(),
             );
@@ -615,9 +615,9 @@ mod ecfft_curve_params_utils {
         #[test]
         fn test_find_coset_for_sw() {
             let param_a_str =
-                "13525369009256184232581429018590412183438692616651058021776068114908837964474";
+                "16724499638196569202260298394005814959494910410746424157114270518485433474755";
             let param_b_str =
-                "18944705127795713747740534479415798471647214051370467611230431453826282142401";
+                "17234435724439643600639628462667735436205737751785032589136003898712312975740";
 
             let coset = find_coset_for_sw(param_a_str, param_b_str);
             println!("coset {:?}", coset);
